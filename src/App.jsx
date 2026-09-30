@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Activity,
   Apple,
@@ -10,7 +10,9 @@ import {
   ChevronRight,
   ClipboardList,
   Clock3,
+  Droplets,
   FileText,
+  Footprints,
   HeartPulse,
   Home,
   MapPin,
@@ -19,10 +21,12 @@ import {
   Pill,
   Plus,
   ReceiptText,
+  Scale,
   Save,
   Share2,
   Sparkles,
   Stethoscope,
+  SlidersHorizontal,
   Thermometer,
   Trash2,
   UserRound,
@@ -56,11 +60,21 @@ function getAgeLabel(birthDate) {
 }
 
 const symptoms = [
-  { id: 'vomit', label: '구토', icon: Activity, color: 'coral' },
-  { id: 'meal', label: '식사', icon: Apple, color: 'green' },
-  { id: 'medicine', label: '투약', icon: Pill, color: 'blue' },
-  { id: 'stool', label: '배변', icon: Sparkles, color: 'amber' },
+  { id: 'vomit', label: '구토', icon: Activity, color: 'coral', fields: [{ key: 'appearance', label: '상태', placeholder: '예: 노란색 거품' }, { key: 'amount', label: '양', placeholder: '예: 소량' }] },
+  { id: 'meal', label: '식사', icon: Apple, color: 'green', fields: [{ key: 'appearance', label: '음식·사료', placeholder: '예: 건식 사료' }, { key: 'amount', label: '섭취량', placeholder: '예: 42g 또는 80%' }] },
+  { id: 'medicine', label: '투약', icon: Pill, color: 'blue', fields: [{ key: 'appearance', label: '약 이름', placeholder: '예: 가스모틴' }, { key: 'amount', label: '용량', placeholder: '예: ½정' }] },
+  { id: 'stool', label: '배변', icon: Sparkles, color: 'amber', fields: [{ key: 'appearance', label: '상태', placeholder: '예: 무른 변' }, { key: 'amount', label: '양', placeholder: '예: 보통' }] },
 ]
+
+const additionalRecordTypes = [
+  { id: 'water', label: '음수', icon: Droplets, color: 'blue', fields: [{ key: 'amount', label: '섭취량', placeholder: '예: 180ml' }, { key: 'appearance', label: '평소 대비', placeholder: '예: 평소와 비슷함' }] },
+  { id: 'activity', label: '산책·활동', icon: Footprints, color: 'green', fields: [{ key: 'amount', label: '활동 시간·거리', placeholder: '예: 30분 또는 1.5km' }, { key: 'appearance', label: '활동 내용', placeholder: '예: 동네 산책' }] },
+  { id: 'weight', label: '체중', icon: Scale, color: 'amber', fields: [{ key: 'amount', label: '체중', placeholder: '예: 4.2kg' }] },
+  { id: 'condition', label: '컨디션', icon: HeartPulse, color: 'coral', fields: [{ key: 'appearance', label: '관찰한 상태', placeholder: '예: 평소처럼 활발함' }] },
+]
+
+const customRecordType = { id: 'custom', label: '직접 입력', icon: FileText, color: 'blue', fields: [] }
+const recordTypes = [...symptoms, ...additionalRecordTypes, customRecordType]
 
 const initialEvents = [
   {
@@ -171,9 +185,19 @@ function App() {
   const [sheet, setSheet] = useState(null)
   const [toast, setToast] = useState('')
   const [copied, setCopied] = useState(false)
+  const [manualHospitalRecords, setManualHospitalRecords] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('doke-manual-hospital-records')
+      const parsed = saved ? JSON.parse(saved) : []
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })
 
   const vomitCount = events.filter((event) => event.type === 'vomit').length
-  const totalSpent = hospitalRecords.reduce((sum, record) => sum + record.amount, 0)
+  const allHospitalRecords = [...manualHospitalRecords, ...hospitalRecords]
+  const totalSpent = allHospitalRecords.reduce((sum, record) => sum + (record.amount || 0), 0)
 
   useEffect(() => {
     window.localStorage.setItem('chunsik-care-events', JSON.stringify(events))
@@ -182,6 +206,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem('chunsik-care-profile', JSON.stringify(profile))
   }, [profile])
+
+  useEffect(() => {
+    window.localStorage.setItem('doke-manual-hospital-records', JSON.stringify(manualHospitalRecords))
+  }, [manualHospitalRecords])
 
   const notify = (message) => {
     setToast(message)
@@ -204,28 +232,49 @@ function App() {
   }
 
   const addEvent = (form) => {
-    const symptom = symptoms.find((item) => item.id === form.type)
-    const detailMap = {
-      vomit: `${form.appearance || '형태 미기록'} · ${form.amount || '양 미기록'}`,
-      meal: `${form.appearance || '사료'} · ${form.amount || '섭취량 미기록'}`,
-      medicine: `${form.appearance || '약 이름 미기록'} · ${form.amount || '용량 미기록'}`,
-      stool: `${form.appearance || '상태 미기록'} · ${form.amount || '양 미기록'}`,
-    }
+    const recordType = recordTypes.find((item) => item.id === form.type) || customRecordType
+    const observedValues = recordType.fields.map((field) => form[field.key]).filter(Boolean)
+    const isCustom = form.type === 'custom'
     setEvents((current) => [
       {
         id: Date.now(),
         type: form.type,
-        title: symptom.label,
+        title: isCustom ? form.title.trim() : recordType.label,
         time: `오늘 ${form.time || '방금'}`,
-        detail: detailMap[form.type],
-        note: form.note,
+        detail: isCustom ? (form.note.trim() || '내용 미기록') : (observedValues.join(' · ') || '세부 내용 미기록'),
+        note: isCustom ? '' : form.note,
         date: '오늘',
         author: '나',
+        photo: form.photo || '',
       },
       ...current,
     ])
     setSheet(null)
-    notify(`${symptom.label} 기록을 저장했어요`)
+    notify(`${isCustom ? form.title.trim() : recordType.label} 기록을 저장했어요`)
+  }
+
+  const addManualHospitalRecord = (form) => {
+    const amount = form.cost ? Number(form.cost) : null
+    const date = form.visitDate ? form.visitDate.split('-').join('. ') : ''
+    setManualHospitalRecords((current) => [{
+      id: `manual-${Date.now()}`,
+      source: 'manual',
+      status: '직접 기록',
+      date,
+      visitDate: form.visitDate,
+      hospital: form.hospital.trim() || '병원명 미입력',
+      reason: form.reason.trim(),
+      diagnosis: form.reason.trim(),
+      opinion: form.opinion.trim(),
+      treatment: form.treatment.trim(),
+      items: form.treatment.trim() || '검사·처치 미입력',
+      medication: form.medication.trim(),
+      amount,
+      memo: form.memo.trim(),
+      photo: form.photo || '',
+    }, ...current])
+    setSheet(null)
+    notify('병원 방문 기록을 저장했어요')
   }
 
   const copyBriefing = async () => {
@@ -286,13 +335,13 @@ function App() {
           />
         )}
         {activeTab === 'timeline' && (
-          <TimelineScreen events={events} onQuickAdd={(type) => setSheet({ type })} onDelete={(id) => setEvents((items) => items.filter((event) => event.id !== id))} />
+          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={(id) => setEvents((items) => items.filter((event) => event.id !== id))} />
         )}
         {activeTab === 'briefing' && (
           <BriefingScreen count={vomitCount} copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} />
         )}
         {activeTab === 'records' && (
-          <RecordsScreen records={hospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'receipt' })} />
+          <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} />
         )}
         {activeTab === 'profile' && (
           <ProfileScreen profile={profile} onSave={(nextProfile) => { setProfile(nextProfile); notify('프로필을 저장했어요') }} onPhotoChange={registerPetPhoto} />
@@ -307,6 +356,12 @@ function App() {
 
       {sheet?.type === 'receipt' ? (
         <ReceiptSheet onClose={() => setSheet(null)} onSave={() => { setSheet(null); notify('영수증을 보관함에 추가했어요') }} />
+      ) : sheet?.type === 'record-picker' ? (
+        <RecordTypeSheet petName={profile.name} onClose={() => setSheet(null)} onSelect={(type) => setSheet({ type })} />
+      ) : sheet?.type === 'hospital-add-picker' ? (
+        <HospitalAddSheet onClose={() => setSheet(null)} onSelect={(type) => setSheet({ type })} />
+      ) : sheet?.type === 'hospital-manual' ? (
+        <ManualHospitalSheet onClose={() => setSheet(null)} onSave={addManualHospitalRecord} />
       ) : sheet ? (
         <LogSheet type={sheet.type} onClose={() => setSheet(null)} onSave={addEvent} />
       ) : null}
@@ -462,8 +517,9 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onSca
   )
 }
 
-function TimelineScreen({ events, onQuickAdd, onDelete }) {
+function TimelineScreen({ events, petName, onChooseRecord, onDelete }) {
   const [filter, setFilter] = useState('all')
+  const [showMoreFilters, setShowMoreFilters] = useState(false)
   const filtered = filter === 'all' ? events : events.filter((event) => event.type === filter)
   const grouped = filtered.reduce((acc, event) => {
     acc[event.date] = [...(acc[event.date] || []), event]
@@ -472,13 +528,22 @@ function TimelineScreen({ events, onQuickAdd, onDelete }) {
 
   return (
     <div className="screen">
-      <Header eyebrow="춘식이의 하루를 한눈에" title="건강 타임라인" />
+      <Header eyebrow={`${petName}의 하루를 한눈에`} title="건강 타임라인" />
       <div className="filter-row">
         {[['all', '전체'], ...symptoms.map((item) => [item.id, item.label])].map(([id, label]) => (
           <button key={id} className={filter === id ? 'selected' : ''} onClick={() => setFilter(id)}>{label}</button>
         ))}
+        <button className={showMoreFilters ? 'selected' : ''} onClick={() => setShowMoreFilters((value) => !value)}><SlidersHorizontal size={13} /> 더보기</button>
       </div>
+      {showMoreFilters && (
+        <div className="more-filter-row" aria-label="추가 기록 필터">
+          {[...additionalRecordTypes, customRecordType].map((item) => (
+            <button key={item.id} className={filter === item.id ? 'selected' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>
+          ))}
+        </div>
+      )}
       <div className="timeline-groups">
+        {filtered.length === 0 && <div className="timeline-empty"><Clock3 size={22} /><p>이 유형의 기록이 아직 없어요.</p><span>아래 기록 추가 버튼으로 첫 기록을 남겨보세요.</span></div>}
         {Object.entries(grouped).map(([date, items]) => (
           <section key={date}>
             <div className="date-divider"><span>{date}</span><i /></div>
@@ -488,13 +553,13 @@ function TimelineScreen({ events, onQuickAdd, onDelete }) {
           </section>
         ))}
       </div>
-      <button className="floating-add" onClick={() => onQuickAdd('vomit')}><Plus size={22} /> 기록 추가</button>
+      <button className="floating-add" onClick={onChooseRecord}><Plus size={22} /> 기록 추가</button>
     </div>
   )
 }
 
 function TimelineItem({ event, onDelete }) {
-  const type = symptoms.find((item) => item.id === event.type) || symptoms[0]
+  const type = recordTypes.find((item) => item.id === event.type) || customRecordType
   const Icon = type.icon
   return (
     <article className="timeline-item">
@@ -504,6 +569,7 @@ function TimelineItem({ event, onDelete }) {
         <p>{event.detail}</p>
         {event.author && <small className="timeline-author">{event.author} 기록</small>}
         {event.note && <span>{event.note}</span>}
+        {event.photo && <img className="timeline-photo" src={event.photo} alt={`${event.title} 첨부 사진`} />}
       </div>
       {onDelete && <button className="delete-button" onClick={() => onDelete(event.id)} aria-label="기록 삭제"><Trash2 size={16} /></button>}
     </article>
@@ -640,22 +706,32 @@ function RecordsScreen({ records, total, onAdd }) {
       </section>
       <div className="section-heading inline records-heading">
         <div><p className="eyebrow">진료 내역</p><h2>최근 방문</h2></div>
-        <button className="outline-small" onClick={onAdd}><Plus size={15} /> 영수증 추가</button>
+        <button className="outline-small" onClick={onAdd}><Plus size={15} /> 기록 추가</button>
       </div>
       <div className="record-list">
         {records.map((record) => (
           <article className="record-card" key={record.id}>
-            <div className="record-date"><CalendarDays size={18} /><span>{record.date}</span><span className="status-pill">{record.status}</span></div>
+            <div className="record-date"><CalendarDays size={18} /><span>{record.date}</span><span className={`status-pill ${record.source === 'manual' ? 'manual' : ''}`}>{record.status}</span></div>
             <h3>{record.hospital}</h3>
-            <div className="diagnosis"><Stethoscope size={17} /><div><span>진단</span><strong>{record.diagnosis}</strong></div></div>
+            <div className="diagnosis"><Stethoscope size={17} /><div><span>{record.source === 'manual' ? '방문 이유' : '진단'}</span><strong>{record.reason || record.diagnosis}</strong></div></div>
             <p>{record.items}</p>
             {expanded === record.id && (
-              <div className="record-detail">
-                <span><b>결제 방법</b> 신용카드</span>
-                <span><b>보관 서류</b> 진료비 영수증 · 처방전</span>
-              </div>
+              record.source === 'manual' ? (
+                <div className="record-detail manual-record-detail">
+                  {record.opinion && <span><b>진료 내용·소견</b>{record.opinion}</span>}
+                  {record.treatment && <span><b>검사·처치</b>{record.treatment}</span>}
+                  {record.medication && <span><b>처방약</b>{record.medication}</span>}
+                  {record.memo && <span><b>메모</b>{record.memo}</span>}
+                  {record.photo && <img src={record.photo} alt="병원 방문 첨부 사진" />}
+                </div>
+              ) : (
+                <div className="record-detail">
+                  <span><b>결제 방법</b> 신용카드</span>
+                  <span><b>보관 서류</b> 진료비 영수증 · 처방전</span>
+                </div>
+              )
             )}
-            <div className="record-footer"><strong>{formatWon(record.amount)}</strong><button onClick={() => setExpanded(expanded === record.id ? null : record.id)}>{expanded === record.id ? '접기' : '상세 보기'} <ChevronRight size={15} className={expanded === record.id ? 'rotate' : ''} /></button></div>
+            <div className="record-footer">{record.amount ? <strong>{formatWon(record.amount)}</strong> : <span className="cost-missing">비용 미입력</span>}<button onClick={() => setExpanded(expanded === record.id ? null : record.id)}>{expanded === record.id ? '접기' : '상세 보기'} <ChevronRight size={15} className={expanded === record.id ? 'rotate' : ''} /></button></div>
           </article>
         ))}
       </div>
@@ -663,17 +739,67 @@ function RecordsScreen({ records, total, onAdd }) {
   )
 }
 
+function RecordTypeSheet({ petName, onClose, onSelect }) {
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="bottom-sheet record-type-sheet">
+        <div className="sheet-handle" />
+        <div className="sheet-header record-picker-header">
+          <div><p>건강 기록 추가</p><h2>무엇을 기록할까요?</h2><span>{petName}의 오늘 상태를 간단히 남겨보세요.</span></div>
+          <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
+        </div>
+
+        <section className="record-picker-section">
+          <h3>기본 기록</h3>
+          <div className="record-type-grid">
+            {symptoms.map((item) => <RecordTypeButton key={item.id} item={item} onClick={() => onSelect(item.id)} />)}
+          </div>
+        </section>
+
+        <section className="record-picker-section">
+          <h3>추천 추가 기록</h3>
+          <div className="record-type-grid">
+            {additionalRecordTypes.map((item) => <RecordTypeButton key={item.id} item={item} onClick={() => onSelect(item.id)} />)}
+          </div>
+        </section>
+
+        <button className="custom-record-button" onClick={() => onSelect('custom')}>
+          <span className="sheet-title-icon blue"><FileText size={20} /></span>
+          <span><strong>직접 입력</strong><small>목욕, 귀 청소, 기침, 피부 상태 등 원하는 내용을 기록해요.</small></span>
+          <ChevronRight size={18} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function RecordTypeButton({ item, onClick }) {
+  const Icon = item.icon
+  return (
+    <button className="record-type-button" onClick={onClick}>
+      <span className={`sheet-title-icon ${item.color}`}><Icon size={20} /></span>
+      <strong>{item.label}</strong>
+    </button>
+  )
+}
+
 function LogSheet({ type, onClose, onSave }) {
-  const selected = symptoms.find((item) => item.id === type)
-  const [form, setForm] = useState({ type, time: new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }), appearance: '', amount: '', note: '' })
+  const selected = recordTypes.find((item) => item.id === type) || customRecordType
+  const isCustom = type === 'custom'
+  const [form, setForm] = useState({ type, title: '', time: new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }), appearance: '', amount: '', note: '', photo: '' })
   const [photoName, setPhotoName] = useState('')
-  const placeholders = useMemo(() => ({
-    vomit: ['예: 노란색 거품', '예: 소량'],
-    meal: ['예: 건식 사료', '예: 42g, 80%'],
-    medicine: ['예: 가스모틴', '예: ½정'],
-    stool: ['예: 무른 변', '예: 보통'],
-  })[type], [type])
   const Icon = selected.icon
+
+  const attachPhoto = async (file) => {
+    if (!file) return
+    setPhotoName(file.name)
+    try {
+      const photo = await resizeImage(file)
+      setForm((current) => ({ ...current, photo }))
+    } catch {
+      setPhotoName('')
+    }
+  }
 
   return (
     <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -681,20 +807,99 @@ function LogSheet({ type, onClose, onSave }) {
         <div className="sheet-handle" />
         <div className="sheet-header">
           <div className={`sheet-title-icon ${selected.color}`}><Icon size={21} /></div>
-          <div><p>빠른 기록</p><h2>{selected.label} 기록하기</h2></div>
+          <div><p>{isCustom ? '나만의 기록' : '관찰 기록'}</p><h2>{isCustom ? '직접 입력 기록하기' : `${selected.label} 기록하기`}</h2></div>
           <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
         </div>
-        <label>발생 시간<input value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} /></label>
-        <div className="form-columns">
-          <label>{type === 'medicine' ? '약 이름' : type === 'meal' ? '종류' : '상태'}<input placeholder={placeholders[0]} value={form.appearance} onChange={(e) => setForm({ ...form, appearance: e.target.value })} /></label>
-          <label>{type === 'medicine' ? '복용량' : type === 'meal' ? '섭취량' : '양'}<input placeholder={placeholders[1]} value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label>
-        </div>
-        <label>메모<textarea placeholder="상황이나 특이사항을 남겨주세요" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
+        {isCustom && <label>기록 제목<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="예: 귀 청소, 기침, 피부 상태" /></label>}
+        <label>{type === 'weight' ? '측정 시간' : '발생 시간'}<input value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} /></label>
+        {!isCustom && selected.fields.length > 0 && (
+          <div className={`form-columns ${selected.fields.length === 1 ? 'single' : ''}`}>
+            {selected.fields.map((field) => (
+              <label key={field.key}>{field.label}<input placeholder={field.placeholder} value={form[field.key]} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} /></label>
+            ))}
+          </div>
+        )}
+        <label>{isCustom ? '내용 또는 메모' : '메모'}<textarea placeholder={isCustom ? '관찰하거나 관리한 내용을 남겨주세요' : '보호자가 관찰한 상황이나 특이사항을 남겨주세요'} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
         <label className="photo-button">
-          <input type="file" accept="image/*" onChange={(e) => setPhotoName(e.target.files?.[0]?.name || '')} />
-          {photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진도 함께 남기기'}
+          <input type="file" accept="image/*" onChange={(event) => attachPhoto(event.target.files?.[0])} />
+          {photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진 첨부하기 (선택)'}
         </label>
         <button className="primary-button full" type="submit">기록 저장</button>
+      </form>
+    </div>
+  )
+}
+
+function HospitalAddSheet({ onClose, onSelect }) {
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="bottom-sheet hospital-add-sheet">
+        <div className="sheet-handle" />
+        <div className="sheet-header record-picker-header">
+          <div><p>방문 기록 남기기</p><h2>병원 기록 추가</h2><span>영수증을 촬영하거나 방문 내용을 직접 남길 수 있어요.</span></div>
+          <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
+        </div>
+        <div className="hospital-method-list">
+          <button onClick={() => onSelect('receipt')}>
+            <span className="method-icon green"><Camera size={22} /></span>
+            <span><strong>영수증·처방전 촬영</strong><small>사진을 추가해 진료와 비용 정보를 정리해요.</small></span>
+            <ChevronRight size={18} />
+          </button>
+          <button onClick={() => onSelect('hospital-manual')}>
+            <span className="method-icon blue"><ClipboardList size={22} /></span>
+            <span><strong>직접 기록하기</strong><small>사진이 없어도 병원 방문 내용을 간단히 남길 수 있어요.</small></span>
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ManualHospitalSheet({ onClose, onSave }) {
+  const now = new Date()
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  const [form, setForm] = useState({ visitDate: localDate, hospital: '', reason: '', opinion: '', treatment: '', medication: '', cost: '', memo: '', photo: '' })
+  const [photoName, setPhotoName] = useState('')
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+
+  const attachPhoto = async (file) => {
+    if (!file) return
+    setPhotoName(file.name)
+    try {
+      update('photo', await resizeImage(file))
+    } catch {
+      setPhotoName('')
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet manual-hospital-sheet" onSubmit={(event) => { event.preventDefault(); onSave(form) }}>
+        <div className="sheet-handle" />
+        <div className="sheet-header">
+          <div className="sheet-title-icon green"><Stethoscope size={21} /></div>
+          <div><p>보호자가 들은 내용을 그대로</p><h2>병원 방문 직접 기록</h2></div>
+          <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
+        </div>
+        <div className="form-columns">
+          <label><span>방문 날짜 <em>필수</em></span><input required type="date" value={form.visitDate} onChange={(event) => update('visitDate', event.target.value)} /></label>
+          <label>병원명<input value={form.hospital} onChange={(event) => update('hospital', event.target.value)} placeholder="예: 다정한 동물병원" /></label>
+        </div>
+        <label><span>방문 이유 <em>필수</em></span><input required value={form.reason} onChange={(event) => update('reason', event.target.value)} placeholder="예: 구토 증상 상담" /></label>
+        <label>진료 내용·소견<textarea value={form.opinion} onChange={(event) => update('opinion', event.target.value)} placeholder="병원에서 들은 내용을 그대로 적어주세요" /></label>
+        <div className="form-columns">
+          <label>검사·처치<input value={form.treatment} onChange={(event) => update('treatment', event.target.value)} placeholder="예: 진찰, 복부 X-ray" /></label>
+          <label>처방약<input value={form.medication} onChange={(event) => update('medication', event.target.value)} placeholder="예: 가스모틴 ½정" /></label>
+        </div>
+        <label>진료비<div className="unit-input"><input inputMode="numeric" value={form.cost ? Number(form.cost).toLocaleString('ko-KR') : ''} onChange={(event) => update('cost', event.target.value.replace(/\D/g, ''))} placeholder="예: 86,400" /><span>원</span></div></label>
+        <label>메모<textarea value={form.memo} onChange={(event) => update('memo', event.target.value)} placeholder="예: 다음 주 재진 권고" /></label>
+        <label className="photo-button">
+          <input type="file" accept="image/*" onChange={(event) => attachPhoto(event.target.files?.[0])} />
+          {photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '처방전·약 봉투·안내문 첨부 (선택)'}
+        </label>
+        <div className="form-safety-note"><FileText size={16} /><p>의학적 판단이 아닌, 병원에서 들은 내용을 가족과 공유하기 위한 기록이에요.</p></div>
+        <button className="primary-button full" type="submit">병원 기록 저장</button>
       </form>
     </div>
   )
@@ -708,15 +913,15 @@ function ReceiptSheet({ onClose, onSave }) {
         <div className="sheet-handle" />
         <div className="sheet-header">
           <div className="sheet-title-icon blue"><ReceiptText size={21} /></div>
-          <div><p>병원 기록</p><h2>영수증 추가하기</h2></div>
+          <div><p>병원 기록</p><h2>영수증·처방전 촬영</h2></div>
           <button className="icon-button" onClick={onClose}><X size={21} /></button>
         </div>
         <label className={`upload-area ${fileName ? 'has-file' : ''}`}>
           <input type="file" accept="image/*" onChange={(e) => setFileName(e.target.files?.[0]?.name || '')} />
-          {fileName ? <><Check size={26} /><strong>{fileName}</strong><span>사진을 선택했어요</span></> : <><Camera size={30} /><strong>영수증을 촬영하거나 선택하세요</strong><span>병원명, 진료일, 금액을 자동으로 읽어드려요</span></>}
+          {fileName ? <><Check size={26} /><strong>{fileName}</strong><span>사진을 선택했어요</span></> : <><Camera size={30} /><strong>영수증이나 처방전을 선택하세요</strong><span>이번 버전에서는 사진을 안전하게 보관해드려요</span></>}
         </label>
         <div className="privacy-note"><FileText size={17} /><p>사진은 진료 기록 정리에만 사용되며, 언제든 삭제할 수 있어요.</p></div>
-        <button className="primary-button full" disabled={!fileName} onClick={onSave}>영수증 분석하기</button>
+        <button className="primary-button full" disabled={!fileName} onClick={onSave}>서류 등록하기</button>
       </div>
     </div>
   )
