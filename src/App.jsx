@@ -26,6 +26,7 @@ import {
   Thermometer,
   Trash2,
   UserRound,
+  UsersRound,
   X,
 } from 'lucide-react'
 
@@ -70,6 +71,7 @@ const initialEvents = [
     detail: '노란색 거품 · 소량',
     note: '아침 식사 전, 기운은 평소와 비슷해요.',
     date: '오늘',
+    author: 'Theo님',
   },
   {
     id: 2,
@@ -79,6 +81,7 @@ const initialEvents = [
     detail: '사료 42g · 80% 섭취',
     note: '',
     date: '오늘',
+    author: '배우자님',
   },
   {
     id: 3,
@@ -88,6 +91,7 @@ const initialEvents = [
     detail: '가스모틴 ½정',
     note: '저녁 식후 30분',
     date: '어제',
+    author: 'Theo님',
   },
   {
     id: 4,
@@ -97,6 +101,7 @@ const initialEvents = [
     detail: '먹은 음식물 · 중간량',
     note: '산책 후 물을 급하게 마셨어요.',
     date: '어제',
+    author: '배우자님',
   },
 ]
 
@@ -154,7 +159,11 @@ function App() {
   const [events, setEvents] = useState(() => {
     try {
       const saved = window.localStorage.getItem('chunsik-care-events')
-      return saved ? JSON.parse(saved) : initialEvents
+      if (!saved) return initialEvents
+      const parsed = JSON.parse(saved)
+      return Array.isArray(parsed)
+        ? parsed.map((event, index) => ({ ...event, author: event.author || (index % 2 === 0 ? 'Theo님' : '배우자님') }))
+        : initialEvents
     } catch {
       return initialEvents
     }
@@ -211,6 +220,7 @@ function App() {
         detail: detailMap[form.type],
         note: form.note,
         date: '오늘',
+        author: '나',
       },
       ...current,
     ])
@@ -235,7 +245,11 @@ function App() {
       <aside className="desktop-sidebar">
         <div className="brand">
           <div className="brand-mark"><PawPrint size={21} strokeWidth={2.2} /></div>
-          <span>춘식 케어</span>
+          <div className="brand-copy">
+            <strong>도케</strong>
+            <span>DOG CARE, TOGETHER</span>
+            <p>가족과 함께 기록하는<br />우리 강아지 건강관리</p>
+          </div>
         </div>
         <div className="side-pet-card">
           <PetAvatar photo={profile.photo} name={profile.name} large />
@@ -257,6 +271,10 @@ function App() {
       </aside>
 
       <main className="main-content">
+        <div className="mobile-brand">
+          <div className="brand-mark"><PawPrint size={19} strokeWidth={2.2} /></div>
+          <div className="brand-copy"><strong>도케</strong><span>DOG CARE, TOGETHER</span><p>가족과 함께 기록하는 우리 강아지 건강관리</p></div>
+        </div>
         {activeTab === 'home' && (
           <HomeScreen
             events={events}
@@ -264,6 +282,7 @@ function App() {
             onQuickAdd={(type) => setSheet({ type })}
             onNavigate={setActiveTab}
             profile={profile}
+            onScanDocument={() => setSheet({ type: 'receipt' })}
           />
         )}
         {activeTab === 'timeline' && (
@@ -356,10 +375,11 @@ function Header({ eyebrow, title, action = true }) {
   )
 }
 
-function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile }) {
+function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onScanDocument }) {
   const latestMeal = events.find((event) => event.type === 'meal')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
   const mealGrams = mealMatch ? mealMatch[0].replace(/[^\d.]/g, '') : null
+  const lastRecord = events[0]
 
   return (
     <div className="screen home-screen">
@@ -381,7 +401,21 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile }) {
         </div>
         <div className="care-message">
           <Sparkles size={17} />
-          <p>어제부터 구토가 반복됐어요. 오늘 한 번 더 하면 병원 상담을 권해요.</p>
+          <div>
+            <p><strong>기록 기반 관찰</strong> · 어제 구토 기록이 있어 오늘 식사량과 활력을 함께 살펴봐요.</p>
+            <span>다음 행동 · 저녁 위장약을 오후 6:30에 챙겨주세요.</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="shared-care-card">
+        <div className="shared-care-heading">
+          <div className="shared-care-title"><span><UsersRound size={18} /></span><div><p>가족과 함께</p><h2>오늘의 공동 돌봄</h2></div></div>
+          <strong className="pending-pill">1건 대기</strong>
+        </div>
+        <div className="shared-care-details">
+          <div><span>마지막 기록</span><strong>{lastRecord?.author || 'Theo님'} · {lastRecord?.time?.replace('오늘 ', '') || '오전 8:42'}</strong></div>
+          <div><span>다음 할 일</span><strong>저녁 위장약 · 오후 6:30</strong></div>
         </div>
       </section>
 
@@ -403,6 +437,12 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile }) {
         </div>
       </section>
 
+      <section className="document-scan-card">
+        <div className="document-scan-icon"><Camera size={21} /></div>
+        <div className="document-scan-copy"><span>AI 병원 서류 정리</span><h2>병원 다녀오셨나요?</h2><p>처방전이나 영수증을 촬영하면 진료·약 정보를 자동으로 정리해드려요.</p></div>
+        <button onClick={onScanDocument}>서류 촬영하기 <ChevronRight size={15} /></button>
+      </section>
+
       <section className="section-block">
         <div className="section-heading inline">
           <div><p className="eyebrow">최근 기록</p><h2>오늘의 타임라인</h2></div>
@@ -413,11 +453,11 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile }) {
         </div>
       </section>
 
-      <button className="briefing-banner" onClick={() => onNavigate('briefing')}>
+      <section className="briefing-banner">
         <div className="banner-icon"><Stethoscope size={22} /></div>
-        <div><span>다음 진료를 더 정확하게</span><strong>1분 만에 진료 브리핑 만들기</strong></div>
-        <ChevronRight size={20} />
-      </button>
+        <div className="briefing-banner-copy"><span>수의사에게 바로 보여주세요</span><strong>{profile.name}의 최근 건강 요약</strong><p>최근 구토 기록, 식사량, 복용약, 체중 변화가 포함돼요.</p></div>
+        <button onClick={() => onNavigate('briefing')}>공유용 리포트 만들기 <ChevronRight size={15} /></button>
+      </section>
     </div>
   )
 }
@@ -462,6 +502,7 @@ function TimelineItem({ event, onDelete }) {
       <div className="timeline-copy">
         <div className="timeline-title"><strong>{event.title}</strong><time>{event.time.replace(`${event.date} `, '')}</time></div>
         <p>{event.detail}</p>
+        {event.author && <small className="timeline-author">{event.author} 기록</small>}
         {event.note && <span>{event.note}</span>}
       </div>
       {onDelete && <button className="delete-button" onClick={() => onDelete(event.id)} aria-label="기록 삭제"><Trash2 size={16} /></button>}
