@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react'
+import { isSupabaseConfigured, supabase } from './lib/supabase.js'
+import { useDokeData } from './lib/doke-data.js'
 import {
   Activity,
   Apple,
@@ -7,6 +9,7 @@ import {
   CalendarDays,
   Camera,
   Check,
+  ChevronDown,
   ChevronRight,
   ClipboardList,
   Clock3,
@@ -15,9 +18,12 @@ import {
   Footprints,
   HeartPulse,
   Home,
+  LogOut,
+  Mail,
   MapPin,
   MoreHorizontal,
   PawPrint,
+  Pencil,
   Pill,
   Plus,
   ReceiptText,
@@ -57,6 +63,31 @@ function getAgeLabel(birthDate) {
   const years = Math.floor(months / 12)
   const rest = months % 12
   return years > 0 ? `${years}년 ${rest}개월` : `${rest}개월`
+}
+
+function getCurrentTimeParts() {
+  const now = new Date()
+  const hour24 = now.getHours()
+  return {
+    period: hour24 >= 12 ? '오후' : '오전',
+    hour: String(hour24 % 12 || 12),
+    minute: String(now.getMinutes()).padStart(2, '0'),
+  }
+}
+
+function formatTimeParts(period, hour, minute) {
+  return `${period} ${Number(hour)}:${String(minute).padStart(2, '0')}`
+}
+
+function toTimeMinutes(period, hour, minute) {
+  const hour12 = Number(hour) % 12
+  return hour12 * 60 + Number(minute) + (period === '오후' ? 12 * 60 : 0)
+}
+
+function getEventTimeMinutes(event) {
+  if (Number.isFinite(event.timeMinutes)) return event.timeMinutes
+  const match = event.time?.match(/(오전|오후)\s*(\d{1,2}):(\d{2})/)
+  return match ? toTimeMinutes(match[1], match[2], match[3]) : -1
 }
 
 const symptoms = [
@@ -119,7 +150,7 @@ const initialEvents = [
   },
 ]
 
-const hospitalRecords = [
+const initialHospitalRecords = [
   {
     id: 1,
     date: '2026. 09. 28',
@@ -149,67 +180,259 @@ const hospitalRecords = [
   },
 ]
 
+const STORAGE_KEYS = {
+  pets: 'doke-pets-v1',
+  selectedPetId: 'doke-selected-pet-id-v1',
+  events: 'doke-events-v2',
+  hospitalRecords: 'doke-hospital-records-v2',
+  migrated: 'doke-multi-pet-migrated-v1',
+}
+const CHUNSIK_ID = 'pet-chunsik'
+
+function parseStoredArray(key) {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key) || 'null')
+    return Array.isArray(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function loadInitialData() {
+  const savedPets = parseStoredArray(STORAGE_KEYS.pets)
+
+  if (savedPets?.length) {
+    const savedSelectedId = window.localStorage.getItem(STORAGE_KEYS.selectedPetId)
+    const selectedPetId = savedPets.some((pet) => pet.id === savedSelectedId) ? savedSelectedId : savedPets[0].id
+    const savedEvents = (parseStoredArray(STORAGE_KEYS.events) || parseStoredArray('chunsik-care-events') || initialEvents).map((event) => ({ ...event, petId: event.petId || savedPets[0].id }))
+    const savedHospitalRecords = (parseStoredArray(STORAGE_KEYS.hospitalRecords) || [...(parseStoredArray('doke-manual-hospital-records') || []), ...initialHospitalRecords]).map((record) => ({ ...record, petId: record.petId || savedPets[0].id }))
+    return { pets: savedPets, selectedPetId, events: savedEvents, hospitalRecords: savedHospitalRecords }
+  }
+
+  let legacyProfile = defaultProfile
+  try {
+    const savedProfile = JSON.parse(window.localStorage.getItem('chunsik-care-profile') || 'null')
+    const legacyPhoto = window.localStorage.getItem('chunsik-care-photo') || ''
+    legacyProfile = savedProfile ? { ...defaultProfile, ...savedProfile } : { ...defaultProfile, photo: legacyPhoto }
+  } catch {
+    legacyProfile = defaultProfile
+  }
+
+  const chunsik = { ...legacyProfile, id: CHUNSIK_ID }
+  const legacyEvents = parseStoredArray('chunsik-care-events') || initialEvents
+  const events = legacyEvents.map((event, index) => ({
+    ...event,
+    petId: event.petId || CHUNSIK_ID,
+    author: event.author || (index % 2 === 0 ? 'Theo님' : '배우자님'),
+  }))
+  const legacyManualRecords = parseStoredArray('doke-manual-hospital-records') || []
+  const hospitalRecords = [...legacyManualRecords, ...initialHospitalRecords].map((record) => ({ ...record, petId: record.petId || CHUNSIK_ID }))
+
+  return { pets: [chunsik], selectedPetId: CHUNSIK_ID, events, hospitalRecords }
+}
+
 const navItems = [
   { id: 'home', label: '홈', icon: Home },
   { id: 'timeline', label: '타임라인', icon: Clock3 },
   { id: 'briefing', label: '진료 브리핑', icon: ClipboardList },
   { id: 'records', label: '병원 기록', icon: ReceiptText },
   { id: 'profile', label: '프로필', icon: UserRound },
+  { id: 'family', label: '가족과 공유', icon: UsersRound },
 ]
 
 const formatWon = (value) => `${value.toLocaleString('ko-KR')}원`
+const honorificName = (value = '가족') => value.endsWith('님') ? value : `${value}님`
 
 function App() {
+  const [session, setSession] = useState(undefined)
+
+  useEffect(() => {
+    if (!supabase) {
+      setSession(null)
+      return undefined
+    }
+    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  if (!isSupabaseConfigured) return <ConfigurationScreen />
+  if (session === undefined) return <AppLoading label="로그인 상태를 확인하고 있어요" />
+  if (!session) return <AuthScreen />
+  return <DokeApp session={session} />
+}
+
+function AppLoading({ label }) {
+  return <main className="access-screen"><div className="access-card centered"><div className="brand-mark"><PawPrint size={22} /></div><h1>도케</h1><p>{label}</p><span className="loading-dot" /></div></main>
+}
+
+function ConfigurationScreen() {
+  return (
+    <main className="access-screen">
+      <section className="access-card configuration-card">
+        <div className="brand-lockup"><div className="brand-mark"><PawPrint size={22} /></div><div><strong>도케</strong><span>DOG CARE, TOGETHER</span></div></div>
+        <h1>Supabase 연결이 필요해요</h1>
+        <p>로그인과 가족 데이터 보호를 위해 로컬 저장소 화면은 열지 않습니다. 프로젝트 루트의 <code>.env.example</code>을 복사해 아래 공개 키를 설정해 주세요.</p>
+        <pre>VITE_SUPABASE_URL=...{`\n`}VITE_SUPABASE_ANON_KEY=...</pre>
+        <small>초대 메일용 관리자 비밀 키는 Vercel 서버 환경 변수에만 설정하며 브라우저 코드에는 절대 넣지 마세요.</small>
+      </section>
+    </main>
+  )
+}
+
+function ErrorScreen({ message, onRetry }) {
+  return <main className="access-screen"><section className="access-card centered"><HeartPulse size={28} /><h1>데이터를 불러오지 못했어요</h1><p>{message}</p><button className="primary-button full" onClick={onRetry}>다시 시도</button></section></main>
+}
+
+function AuthScreen() {
+  const [mode, setMode] = useState('login')
+  const [form, setForm] = useState({ displayName: '', email: '', password: '' })
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      if (mode === 'signup') {
+        const { data, error: authError } = await supabase.auth.signUp({
+          email: form.email.trim(),
+          password: form.password,
+          options: { data: { display_name: form.displayName.trim() }, emailRedirectTo: window.location.origin },
+        })
+        if (authError) throw authError
+        if (!data.session) setMessage('가입 확인 이메일을 보냈어요. 이메일 인증 후 로그인해 주세요.')
+      } else {
+        const { error: authError } = await supabase.auth.signInWithPassword({ email: form.email.trim(), password: form.password })
+        if (authError) throw authError
+      }
+    } catch (authError) {
+      setError(authError.message || '로그인 요청을 처리하지 못했어요.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="access-screen">
+      <section className="access-card auth-card">
+        <div className="brand-lockup"><div className="brand-mark"><PawPrint size={22} /></div><div><strong>도케</strong><span>DOG CARE, TOGETHER</span></div></div>
+        <div><p className="eyebrow">초대된 가족만 함께 보는 건강 기록</p><h1>{mode === 'login' ? '다시 만나서 반가워요' : '가족 건강 공간을 시작해요'}</h1></div>
+        <div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); setMessage('') }}>로그인</button><button className={mode === 'signup' ? 'active' : ''} onClick={() => { setMode('signup'); setError(''); setMessage('') }}>회원가입</button></div>
+        <form onSubmit={submit}>
+          {mode === 'signup' && <label>이름<input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="가족에게 표시할 이름" /></label>}
+          <label>이메일<input required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@example.com" /></label>
+          <label>비밀번호<input required minLength="6" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="6자 이상" /></label>
+          {error && <p className="form-message error">{error}</p>}
+          {message && <p className="form-message success">{message}</p>}
+          <button className="primary-button full" disabled={busy}>{busy ? '처리 중…' : mode === 'login' ? '로그인' : '회원가입'}</button>
+        </form>
+        <small className="access-note">로그인 전에는 반려견과 건강 데이터를 불러오지 않습니다.</small>
+      </section>
+    </main>
+  )
+}
+
+function WorkspaceSetup({ session, workspace }) {
+  const displayName = workspace.profile?.display_name || session.user.email?.split('@')[0] || '우리'
+  const [name, setName] = useState(`${displayName}의 가족`)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+
+  const create = async (migrate = false) => {
+    setBusy(migrate ? 'migrate' : 'create')
+    setError('')
+    try {
+      const householdId = await workspace.actions.createHousehold(name.trim())
+      if (migrate) await workspace.actions.migrateLegacy(householdId)
+    } catch (actionError) {
+      setError(actionError.message || '가족 공간을 만들지 못했어요.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const accept = async (id) => {
+    setBusy(id)
+    setError('')
+    try { await workspace.actions.acceptInvitation(id) } catch (actionError) { setError(actionError.message || '초대를 수락하지 못했어요.') } finally { setBusy('') }
+  }
+
+  return (
+    <main className="access-screen">
+      <section className="access-card workspace-card">
+        <div className="brand-lockup"><div className="brand-mark"><PawPrint size={22} /></div><div><strong>도케</strong><span>DOG CARE, TOGETHER</span></div></div>
+        <h1>가족 공간을 선택해 주세요</h1>
+        <p>활성 구성원만 이 공간의 모든 반려견과 건강 기록을 볼 수 있어요.</p>
+        {workspace.pendingInvitations.length > 0 && <div className="pending-invite-list"><h2>받은 초대</h2>{workspace.pendingInvitations.map((invite) => <article key={invite.id}><div><strong>{invite.households?.name || '초대된 가족 공간'}</strong><span>{invite.invited_email} · {new Date(invite.expires_at).toLocaleDateString('ko-KR')}까지</span></div><button disabled={Boolean(busy)} onClick={() => accept(invite.id)}>{busy === invite.id ? '수락 중…' : '초대 수락'}</button></article>)}</div>}
+        <div className="setup-divider"><span>또는 새로 만들기</span></div>
+        <label className="setup-label">가족 공간 이름<input required value={name} onChange={(event) => setName(event.target.value)} maxLength="80" /></label>
+        {error && <p className="form-message error">{error}</p>}
+        {workspace.legacyAvailable ? (
+          <div className="legacy-choice"><div><strong>기존 춘식 기록을 내 가족 공간으로 옮길까요?</strong><p>동의하면 가족 공간을 만든 뒤 이 브라우저의 로컬 기록을 한 번만 업로드해요.</p></div><button className="primary-button full" disabled={!name.trim() || Boolean(busy)} onClick={() => create(true)}>{busy === 'migrate' ? '옮기는 중…' : '가족 공간 만들고 기록 옮기기'}</button><button className="secondary-button" disabled={!name.trim() || Boolean(busy)} onClick={() => create(false)}>기록 없이 시작</button></div>
+        ) : <button className="primary-button full" disabled={!name.trim() || Boolean(busy)} onClick={() => create(false)}>{busy === 'create' ? '만드는 중…' : '새 가족 공간 만들기'}</button>}
+        <button className="text-action" onClick={() => supabase.auth.signOut()}><LogOut size={15} /> 로그아웃</button>
+      </section>
+    </main>
+  )
+}
+
+function EmptyPetState({ household, isOwner, onAdd, onLogout, sheet, closeSheet, onSave }) {
+  return (
+    <main className="access-screen">
+      <section className="access-card centered">
+        <div className="brand-mark"><PawPrint size={22} /></div>
+        <p className="eyebrow">{household.name}</p><h1>등록된 반려견이 없어요</h1>
+        <p>{isOwner ? '첫 반려견을 추가하면 가족과 건강 기록을 시작할 수 있어요.' : '가족 공간 관리자에게 반려견 등록을 요청해 주세요.'}</p>
+        {isOwner && <button className="primary-button full" onClick={onAdd}><Plus size={17} /> 반려견 추가</button>}
+        <button className="text-action" onClick={onLogout}><LogOut size={15} /> 로그아웃</button>
+      </section>
+      {sheet?.type === 'pet-add' && <AddPetSheet onClose={closeSheet} onSave={onSave} />}
+    </main>
+  )
+}
+
+function DokeApp({ session }) {
   const [activeTab, setActiveTab] = useState('home')
-  const [profile, setProfile] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem('chunsik-care-profile')
-      const legacyPhoto = window.localStorage.getItem('chunsik-care-photo') || ''
-      return saved ? { ...defaultProfile, ...JSON.parse(saved) } : { ...defaultProfile, photo: legacyPhoto }
-    } catch {
-      return defaultProfile
-    }
-  })
-  const [events, setEvents] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem('chunsik-care-events')
-      if (!saved) return initialEvents
-      const parsed = JSON.parse(saved)
-      return Array.isArray(parsed)
-        ? parsed.map((event, index) => ({ ...event, author: event.author || (index % 2 === 0 ? 'Theo님' : '배우자님') }))
-        : initialEvents
-    } catch {
-      return initialEvents
-    }
-  })
   const [sheet, setSheet] = useState(null)
   const [toast, setToast] = useState('')
   const [copied, setCopied] = useState(false)
-  const [manualHospitalRecords, setManualHospitalRecords] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem('doke-manual-hospital-records')
-      const parsed = saved ? JSON.parse(saved) : []
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
-    }
-  })
+  const workspace = useDokeData(session)
 
+  if (workspace.loading) return <AppLoading label="가족 공간을 불러오고 있어요" />
+  if (workspace.error) return <ErrorScreen message={workspace.error} onRetry={workspace.actions.reload} />
+  if (!workspace.household) return <WorkspaceSetup session={session} workspace={workspace} />
+
+  const data = { pets: workspace.pets, selectedPetId: workspace.selectedPetId, events: workspace.events, hospitalRecords: workspace.hospitalRecords }
+
+  const profile = data.pets.find((pet) => pet.id === data.selectedPetId) || data.pets[0]
+  if (!profile) {
+    return (
+      <EmptyPetState
+        household={workspace.household}
+        isOwner={workspace.isOwner}
+        onAdd={() => setSheet({ type: 'pet-add' })}
+        onLogout={() => supabase.auth.signOut()}
+        sheet={sheet}
+        closeSheet={() => setSheet(null)}
+        onSave={async (newPet) => {
+          try {
+            await workspace.actions.createPet({ ...defaultProfile, ...newPet })
+            setSheet(null)
+          } catch (error) {
+            setToast(error.message || '반려견을 추가하지 못했어요')
+          }
+        }}
+      />
+    )
+  }
+  const events = data.events.filter((event) => event.petId === profile.id)
+  const allHospitalRecords = data.hospitalRecords.filter((record) => record.petId === profile.id)
   const vomitCount = events.filter((event) => event.type === 'vomit').length
-  const allHospitalRecords = [...manualHospitalRecords, ...hospitalRecords]
   const totalSpent = allHospitalRecords.reduce((sum, record) => sum + (record.amount || 0), 0)
-
-  useEffect(() => {
-    window.localStorage.setItem('chunsik-care-events', JSON.stringify(events))
-  }, [events])
-
-  useEffect(() => {
-    window.localStorage.setItem('chunsik-care-profile', JSON.stringify(profile))
-  }, [profile])
-
-  useEffect(() => {
-    window.localStorage.setItem('doke-manual-hospital-records', JSON.stringify(manualHospitalRecords))
-  }, [manualHospitalRecords])
 
   const notify = (message) => {
     setToast(message)
@@ -224,61 +447,125 @@ function App() {
     }
     try {
       const resized = await resizeImage(file)
-      setProfile((current) => ({ ...current, photo: resized }))
-      notify('춘식이 사진을 등록했어요')
-    } catch {
-      notify('사진을 불러오지 못했어요')
+      await workspace.actions.updatePet({ ...profile, photo: resized })
+      notify(`${profile.name} 사진을 등록했어요`)
+    } catch (error) {
+      notify(error.message || '사진을 불러오지 못했어요')
     }
   }
 
-  const addEvent = (form) => {
+  const addEvent = async (form) => {
     const recordType = recordTypes.find((item) => item.id === form.type) || customRecordType
     const observedValues = recordType.fields.map((field) => form[field.key]).filter(Boolean)
     const isCustom = form.type === 'custom'
-    setEvents((current) => [
-      {
-        id: Date.now(),
-        type: form.type,
-        title: isCustom ? form.title.trim() : recordType.label,
-        time: `오늘 ${form.time || '방금'}`,
-        detail: isCustom ? (form.note.trim() || '내용 미기록') : (observedValues.join(' · ') || '세부 내용 미기록'),
-        note: isCustom ? '' : form.note,
-        date: '오늘',
-        author: '나',
-        photo: form.photo || '',
-      },
-      ...current,
-    ])
-    setSheet(null)
-    notify(`${isCustom ? form.title.trim() : recordType.label} 기록을 저장했어요`)
+    const occurredAt = new Date()
+    occurredAt.setHours(Math.floor(form.timeMinutes / 60), form.timeMinutes % 60, 0, 0)
+    try {
+      await workspace.actions.createTimeline({ petId: profile.id, type: form.type, occurredAt: occurredAt.toISOString(), details: { title: isCustom ? form.title.trim() : recordType.label, detail: isCustom ? (form.note.trim() || '내용 미기록') : (observedValues.join(' · ') || '세부 내용 미기록'), note: isCustom ? '' : form.note }, photo: form.photo || '' })
+      setSheet(null)
+      notify(`${isCustom ? form.title.trim() : recordType.label} 기록을 저장했어요`)
+    } catch (error) {
+      notify(error.message || '기록을 저장하지 못했어요')
+    }
   }
 
-  const addManualHospitalRecord = (form) => {
+  const addManualHospitalRecord = async (form) => {
     const amount = form.cost ? Number(form.cost) : null
-    const date = form.visitDate ? form.visitDate.split('-').join('. ') : ''
-    setManualHospitalRecords((current) => [{
-      id: `manual-${Date.now()}`,
-      source: 'manual',
-      status: '직접 기록',
-      date,
-      visitDate: form.visitDate,
-      hospital: form.hospital.trim() || '병원명 미입력',
-      reason: form.reason.trim(),
-      diagnosis: form.reason.trim(),
-      opinion: form.opinion.trim(),
-      treatment: form.treatment.trim(),
-      items: form.treatment.trim() || '검사·처치 미입력',
-      medication: form.medication.trim(),
-      amount,
-      memo: form.memo.trim(),
-      photo: form.photo || '',
-    }, ...current])
-    setSheet(null)
-    notify('병원 방문 기록을 저장했어요')
+    try {
+      await workspace.actions.createHospital({ petId: profile.id, visitedAt: new Date(`${form.visitDate}T12:00:00`).toISOString(), hospital: form.hospital.trim(), reason: form.reason.trim(), medication: form.medication.trim(), amount, photo: form.photo || '', details: { source: 'manual', status: '직접 기록', diagnosis: form.reason.trim(), opinion: form.opinion.trim(), treatment: form.treatment.trim(), items: form.treatment.trim() || '검사·처치 미입력', memo: form.memo.trim() } })
+      setSheet(null)
+      notify('병원 방문 기록을 저장했어요')
+    } catch (error) {
+      notify(error.message || '병원 기록을 저장하지 못했어요')
+    }
+  }
+
+  const addScannedHospitalRecord = async (photo) => {
+    const now = new Date()
+    try {
+      await workspace.actions.createHospital({ petId: profile.id, visitedAt: now.toISOString(), hospital: '', reason: '영수증·처방전 촬영', medication: '', amount: null, photo, details: { source: 'document', status: '서류 등록', diagnosis: '서류 내용을 확인해 주세요', items: '첨부 서류 1장' } })
+      setSheet(null)
+      notify(`${profile.name}의 병원 서류를 등록했어요`)
+    } catch (error) {
+      notify(error.message || '병원 서류를 등록하지 못했어요')
+    }
+  }
+
+  const updateEvent = async (form) => {
+    const record = sheet.event
+    const occurredAt = new Date(record.occurredAt)
+    occurredAt.setHours(Math.floor(form.timeMinutes / 60), form.timeMinutes % 60, 0, 0)
+    try {
+      await workspace.actions.updateTimeline({ id: record.id, occurredAt: occurredAt.toISOString(), details: { title: record.title, detail: form.detail.trim() || '세부 내용 미기록', note: form.note.trim() }, photo: form.photo, photoPath: record.photoPath })
+      setSheet(null)
+      notify('내 기록을 수정했어요')
+    } catch (error) {
+      notify(error.message || '기록을 수정하지 못했어요')
+    }
+  }
+
+  const updateHospitalRecord = async (form) => {
+    const record = sheet.record
+    try {
+      await workspace.actions.updateHospital({ id: record.id, visitedAt: new Date(`${form.visitDate}T12:00:00`).toISOString(), hospital: form.hospital.trim(), reason: form.reason.trim(), medication: form.medication.trim(), amount: form.cost ? Number(form.cost) : null, photo: form.photo, photoPath: record.photoPath, details: { source: record.source || 'manual', status: record.status || '직접 기록', diagnosis: form.reason.trim(), opinion: form.opinion.trim(), treatment: form.treatment.trim(), items: form.treatment.trim() || '검사·처치 미입력', memo: form.memo.trim() } })
+      setSheet(null)
+      notify('병원 기록을 수정했어요')
+    } catch (error) {
+      notify(error.message || '병원 기록을 수정하지 못했어요')
+    }
+  }
+
+  const saveProfile = async (nextProfile) => {
+    try {
+      await workspace.actions.updatePet(nextProfile)
+      notify('프로필을 저장했어요')
+    } catch (error) {
+      notify(error.message || '프로필을 저장하지 못했어요')
+    }
+  }
+
+  const addPet = async (newPet) => {
+    try {
+      await workspace.actions.createPet({ ...defaultProfile, ...newPet })
+      setSheet(null)
+      setActiveTab('home')
+      notify(`${newPet.name} 프로필을 추가했어요`)
+    } catch (error) {
+      notify(error.message || '반려견을 추가하지 못했어요')
+    }
+  }
+
+  const selectPet = (petId) => {
+    try {
+      workspace.actions.selectPet(petId)
+      setSheet(null)
+    } catch (error) {
+      notify(error.message)
+    }
+  }
+
+  const deleteEvent = async (id) => {
+    try {
+      await workspace.actions.deleteTimeline(id)
+      notify('기록을 삭제했어요')
+    } catch (error) {
+      notify(error.message || '기록을 삭제하지 못했어요')
+    }
+  }
+
+  const migrateLegacy = async () => {
+    try {
+      await workspace.actions.migrateLegacy()
+      notify('기존 기록을 가족 공간으로 옮겼어요')
+    } catch (error) {
+      notify(error.message || '기존 기록을 옮기지 못했어요')
+    }
   }
 
   const copyBriefing = async () => {
-    const text = `${profile.name} · ${profile.breed} · ${profile.sex} · ${getAgeLabel(profile.birthDate)} · ${profile.weight || '-'}kg\n중성화: ${profile.neutered} · 알레르기: ${profile.allergies || '기록 없음'}\n\n[내원 이유]\n최근 반복되는 구토 증상\n\n[최근 경과]\n- 최근 24시간 구토 ${vomitCount}회\n- 마지막 구토: 오늘 오전 8:42\n- 노란색 거품, 소량\n- 식욕은 평소의 약 80%\n\n[복용 중인 약]\n위장약(가스모틴 1/2정), 하루 2회`
+    const latestMedicine = events.find((event) => event.type === 'medicine')
+    const latestHospital = allHospitalRecords[0]
+    const text = `${profile.name} · ${profile.breed || '견종 미입력'} · ${profile.sex || '성별 미입력'} · ${getAgeLabel(profile.birthDate)} · ${profile.weight || '-'}kg\n중성화: ${profile.neutered || '미입력'} · 알레르기: ${profile.allergies || '기록 없음'}\n\n[최근 기록]\n- 최근 구토 ${vomitCount}회\n- 최근 투약: ${latestMedicine?.detail || '기록 없음'}\n- 최근 병원 방문: ${latestHospital ? `${latestHospital.date} ${latestHospital.reason || latestHospital.diagnosis}` : '기록 없음'}`
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
@@ -300,13 +587,14 @@ function App() {
             <p>가족과 함께 기록하는<br />우리 강아지 건강관리</p>
           </div>
         </div>
-        <div className="side-pet-card">
+        <button className="side-pet-card" onClick={() => setSheet({ type: 'pet-switcher' })}>
           <PetAvatar photo={profile.photo} name={profile.name} large />
-          <div>
+          <div className="side-pet-copy">
             <strong>{profile.name}</strong>
             <p>{profile.breed} · {getAgeLabel(profile.birthDate)}</p>
           </div>
-        </div>
+          <ChevronDown size={16} />
+        </button>
         <nav className="side-nav" aria-label="주 메뉴">
           {navItems.map((item) => (
             <NavButton key={item.id} item={item} active={activeTab === item.id} onClick={() => setActiveTab(item.id)} />
@@ -316,6 +604,7 @@ function App() {
           <HeartPulse size={20} />
           <strong>응급 상황인가요?</strong>
           <p>반복 구토와 무기력이 함께 나타나면 바로 병원에 문의하세요.</p>
+          <button className="sidebar-logout" onClick={() => supabase.auth.signOut()}><LogOut size={14} /> 로그아웃</button>
         </div>
       </aside>
 
@@ -323,6 +612,7 @@ function App() {
         <div className="mobile-brand">
           <div className="brand-mark"><PawPrint size={19} strokeWidth={2.2} /></div>
           <div className="brand-copy"><strong>도케</strong><span>DOG CARE, TOGETHER</span><p>가족과 함께 기록하는 우리 강아지 건강관리</p></div>
+          <button className="mobile-pet-switch" onClick={() => setSheet({ type: 'pet-switcher' })}><PetAvatar photo={profile.photo} name={profile.name} /><span>{profile.name}</span><ChevronDown size={14} /></button>
         </div>
         {activeTab === 'home' && (
           <HomeScreen
@@ -332,19 +622,30 @@ function App() {
             onNavigate={setActiveTab}
             profile={profile}
             onScanDocument={() => setSheet({ type: 'receipt' })}
+            memberCount={workspace.members.length}
+            legacyAvailable={workspace.legacyAvailable && workspace.isOwner}
+            onMigrate={migrateLegacy}
           />
         )}
         {activeTab === 'timeline' && (
-          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={(id) => setEvents((items) => items.filter((event) => event.id !== id))} />
+          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: 'timeline-edit', event })} canManage={(event) => workspace.isOwner || event.createdBy === session.user.id} />
         )}
         {activeTab === 'briefing' && (
-          <BriefingScreen count={vomitCount} copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} />
+          <BriefingScreen count={vomitCount} copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} />
         )}
         {activeTab === 'records' && (
-          <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} />
+          <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} onEdit={(record) => setSheet({ type: 'hospital-edit', record })} canEdit={(record) => workspace.isOwner || record.createdBy === session.user.id} />
         )}
         {activeTab === 'profile' && (
-          <ProfileScreen profile={profile} onSave={(nextProfile) => { setProfile(nextProfile); notify('프로필을 저장했어요') }} onPhotoChange={registerPetPhoto} />
+          <ProfileScreen profile={profile} onSave={saveProfile} onPhotoChange={registerPetPhoto} canEdit={workspace.isOwner} />
+        )}
+        {activeTab === 'family' && (
+          <FamilyShareScreen
+            session={session}
+            workspace={workspace}
+            onInvite={() => setSheet({ type: 'family-invite' })}
+            notify={notify}
+          />
         )}
       </main>
 
@@ -354,14 +655,24 @@ function App() {
         ))}
       </nav>
 
-      {sheet?.type === 'receipt' ? (
-        <ReceiptSheet onClose={() => setSheet(null)} onSave={() => { setSheet(null); notify('영수증을 보관함에 추가했어요') }} />
+      {sheet?.type === 'pet-switcher' ? (
+        <PetSwitcherSheet pets={data.pets} selectedPetId={data.selectedPetId} onClose={() => setSheet(null)} onSelect={selectPet} onAdd={() => setSheet({ type: 'pet-add' })} canManage={workspace.isOwner} />
+      ) : sheet?.type === 'pet-add' ? (
+        <AddPetSheet onClose={() => setSheet(null)} onSave={addPet} />
+      ) : sheet?.type === 'family-invite' ? (
+        <InviteFamilySheet session={session} workspace={workspace} onClose={() => setSheet(null)} />
+      ) : sheet?.type === 'receipt' ? (
+        <ReceiptSheet onClose={() => setSheet(null)} onSave={addScannedHospitalRecord} />
       ) : sheet?.type === 'record-picker' ? (
         <RecordTypeSheet petName={profile.name} onClose={() => setSheet(null)} onSelect={(type) => setSheet({ type })} />
       ) : sheet?.type === 'hospital-add-picker' ? (
         <HospitalAddSheet onClose={() => setSheet(null)} onSelect={(type) => setSheet({ type })} />
       ) : sheet?.type === 'hospital-manual' ? (
         <ManualHospitalSheet onClose={() => setSheet(null)} onSave={addManualHospitalRecord} />
+      ) : sheet?.type === 'hospital-edit' ? (
+        <ManualHospitalSheet initial={sheet.record} onClose={() => setSheet(null)} onSave={updateHospitalRecord} />
+      ) : sheet?.type === 'timeline-edit' ? (
+        <EditTimelineSheet event={sheet.event} onClose={() => setSheet(null)} onSave={updateEvent} />
       ) : sheet ? (
         <LogSheet type={sheet.type} onClose={() => setSheet(null)} onSave={addEvent} />
       ) : null}
@@ -408,6 +719,77 @@ function PetAvatar({ photo, name = '반려견', large = false, onPhotoChange, pr
   return <div className={`pet-avatar ${large ? 'large' : ''}`}>{content}</div>
 }
 
+function PetSwitcherSheet({ pets, selectedPetId, onClose, onSelect, onAdd, canManage }) {
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="bottom-sheet pet-switcher-sheet">
+        <div className="sheet-handle" />
+        <div className="sheet-header record-picker-header">
+          <div><p>건강 기록 대상</p><h2>반려견 선택</h2><span>선택한 반려견의 기록만 화면에 표시돼요.</span></div>
+          <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
+        </div>
+        <div className="pet-option-list">
+          {pets.map((pet) => (
+            <button key={pet.id} className={pet.id === selectedPetId ? 'selected' : ''} onClick={() => onSelect(pet.id)}>
+              <PetAvatar photo={pet.photo} name={pet.name} large />
+              <span><strong>{pet.name}</strong><small>{pet.breed || '견종 미입력'} · {getAgeLabel(pet.birthDate)}</small></span>
+              {pet.id === selectedPetId ? <i><Check size={15} /> 선택됨</i> : <ChevronRight size={17} />}
+            </button>
+          ))}
+        </div>
+        {canManage && <button className="add-pet-button" onClick={onAdd}><Plus size={18} /> 반려견 추가</button>}
+      </div>
+    </div>
+  )
+}
+
+function AddPetSheet({ onClose, onSave }) {
+  const [form, setForm] = useState({ name: '', photo: '', breed: '', sex: '', birthDate: '', weight: '', neutered: '', allergies: '', memo: '' })
+  const [photoName, setPhotoName] = useState('')
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+
+  const attachPhoto = async (file) => {
+    if (!file) return
+    setPhotoName(file.name)
+    try {
+      update('photo', await resizeImage(file))
+    } catch {
+      setPhotoName('')
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet add-pet-sheet" onSubmit={(event) => { event.preventDefault(); onSave(form) }}>
+        <div className="sheet-handle" />
+        <div className="sheet-header">
+          <div className="sheet-title-icon green"><PawPrint size={21} /></div>
+          <div><p>새로운 가족 등록</p><h2>반려견 추가</h2></div>
+          <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
+        </div>
+        <div className="add-pet-photo-row">
+          <label className="pet-avatar editable profile-photo">
+            {form.photo ? <img src={form.photo} alt="새 반려견 프로필 미리보기" /> : <PawPrint size={27} />}
+            <input type="file" accept="image/*" onChange={(event) => attachPhoto(event.target.files?.[0])} />
+            <i className="avatar-camera"><Camera size={16} /></i>
+          </label>
+          <div><strong>대표 사진</strong><p>{photoName || '선택 사항 · 정사각형으로 자동 조정돼요.'}</p></div>
+        </div>
+        <label><span>이름 <em>필수</em></span><input required value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="반려견 이름" /></label>
+        <div className="form-columns">
+          <label>견종<input value={form.breed} onChange={(event) => update('breed', event.target.value)} placeholder="예: 비숑 프리제" /></label>
+          <label>성별<select value={form.sex} onChange={(event) => update('sex', event.target.value)}><option value="">선택 안 함</option><option>수컷</option><option>암컷</option></select></label>
+          <label>생년월일<input type="date" value={form.birthDate} onChange={(event) => update('birthDate', event.target.value)} /></label>
+          <label>몸무게<div className="unit-input"><input type="number" min="0.1" step="0.1" value={form.weight} onChange={(event) => update('weight', event.target.value)} placeholder="4.2" /><span>kg</span></div></label>
+          <label className="full-field">중성화 여부<select value={form.neutered} onChange={(event) => update('neutered', event.target.value)}><option value="">선택 안 함</option><option>완료</option><option>하지 않음</option><option>예정</option><option>모름</option></select></label>
+        </div>
+        <label>알레르기·특이사항<textarea value={form.allergies} onChange={(event) => update('allergies', event.target.value)} placeholder="없으면 비워두세요" /></label>
+        <button className="primary-button full" type="submit">추가하고 이 반려견 선택</button>
+      </form>
+    </div>
+  )
+}
+
 function NavButton({ item, active, onClick }) {
   const Icon = item.icon
   return (
@@ -430,47 +812,139 @@ function Header({ eyebrow, title, action = true }) {
   )
 }
 
-function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onScanDocument }) {
+function FamilyShareScreen({ session, workspace, onInvite, notify }) {
+  const pending = workspace.invitations.filter((item) => item.status === 'PENDING')
+  const otherPending = workspace.pendingInvitations.filter((item) => item.household_id !== workspace.household.id)
+
+  const revoke = async (id) => {
+    try { await workspace.actions.revokeInvitation(id); notify('대기 중인 초대를 취소했어요') } catch (error) { notify(error.message) }
+  }
+  const remove = async (member) => {
+    const name = member.profile?.display_name || member.profile?.email || '구성원'
+    if (!window.confirm(`${name}님을 이 가족 공간에서 내보낼까요?`)) return
+    try { await workspace.actions.removeMember(member.id); notify('가족 구성원을 내보냈어요') } catch (error) { notify(error.message) }
+  }
+  const accept = async (id) => {
+    try { await workspace.actions.acceptInvitation(id); notify('가족 초대를 수락했어요') } catch (error) { notify(error.message) }
+  }
+
+  return (
+    <div className="screen family-screen">
+      <Header eyebrow="초대받은 사람만 함께" title="가족과 공유" />
+      <section className="family-summary">
+        <div className="family-summary-icon"><UsersRound size={24} /></div>
+        <div><span>현재 가족 공간</span><h2>{workspace.household.name}</h2><p>초대한 사람과 이 공간의 모든 반려견 건강 기록을 함께 관리해요.</p></div>
+        <strong>{workspace.members.length}명</strong>
+      </section>
+
+      {workspace.households.length > 1 && <section className="household-switch"><h3>내 가족 공간</h3><div>{workspace.households.map((household) => <button key={household.id} className={household.id === workspace.household.id ? 'active' : ''} onClick={() => workspace.actions.selectHousehold(household.id)}>{household.name}{household.id === workspace.household.id && <Check size={14} />}</button>)}</div></section>}
+
+      {otherPending.length > 0 && <section className="family-section"><div className="family-section-heading"><div><p className="eyebrow">받은 초대</p><h2>참여 대기 중인 공간</h2></div></div><div className="member-list">{otherPending.map((invite) => <article key={invite.id}><div className="member-avatar"><Mail size={17} /></div><div><strong>{invite.households?.name || '초대된 가족 공간'}</strong><span>{invite.invited_email}</span></div><button className="member-action" onClick={() => accept(invite.id)}>수락</button></article>)}</div></section>}
+
+      <section className="family-section">
+        <div className="family-section-heading"><div><p className="eyebrow">활성 구성원</p><h2>함께 관리하는 사람</h2></div>{workspace.isOwner && <button className="outline-small" onClick={onInvite}><Plus size={15} /> 가족 초대</button>}</div>
+        <div className="member-list">
+          {workspace.members.map((member) => {
+            const memberName = member.profile?.display_name || member.profile?.email || '가족 구성원'
+            return <article key={member.id}><div className="member-avatar">{memberName.slice(0, 1)}</div><div><strong>{memberName}{member.user_id === session.user.id && ' (나)'}</strong><span>{member.profile?.email || ''} · {new Date(member.joined_at).toLocaleDateString('ko-KR')} 참여</span></div><b className={`role-badge ${member.role.toLowerCase()}`}>{member.role === 'OWNER' ? '관리자' : '구성원'}</b>{workspace.isOwner && member.role !== 'OWNER' && <button className="member-action danger" onClick={() => remove(member)}>내보내기</button>}</article>
+          })}
+        </div>
+      </section>
+
+      {workspace.isOwner && <section className="family-section"><div className="family-section-heading"><div><p className="eyebrow">초대 관리</p><h2>대기 중인 사용자</h2></div></div>{pending.length ? <div className="member-list">{pending.map((invite) => <article key={invite.id}><div className="member-avatar"><Mail size={17} /></div><div><strong>{invite.invited_email}</strong><span>{new Date(invite.expires_at).toLocaleDateString('ko-KR')}까지 · 대기 중</span></div><button className="member-action danger" onClick={() => revoke(invite.id)}>취소</button></article>)}</div> : <div className="family-empty">대기 중인 초대가 없어요.</div>}</section>}
+
+      {!workspace.isOwner && <p className="permission-note">구성원은 반려견과 기록을 보고 새 기록을 추가할 수 있어요. 초대·내보내기와 반려견 프로필 수정은 관리자만 할 수 있습니다.</p>}
+      <button className="logout-button" onClick={() => supabase.auth.signOut()}><LogOut size={16} /> {session.user.email} 로그아웃</button>
+    </div>
+  )
+}
+
+function InviteFamilySheet({ session, workspace, onClose }) {
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const response = await workspace.actions.invite(email.trim(), session.access_token)
+      setResult(response.deliveryMessage)
+    } catch (actionError) {
+      setError(actionError.message || '초대를 만들지 못했어요.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet invite-sheet" onSubmit={submit}>
+        <div className="sheet-handle" />
+        <div className="sheet-header"><div className="sheet-title-icon green"><Mail size={20} /></div><div><p>{workspace.household.name}</p><h2>가족 초대</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={21} /></button></div>
+        <p className="invite-description">입력한 이메일로 초대 레코드를 만들고, 서버 메일 설정이 완료된 경우 가입 링크를 발송해요.</p>
+        {!result && <label>초대할 이메일<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="family@example.com" /></label>}
+        {error && <p className="form-message error">{error}</p>}
+        {result ? <><p className="form-message success">{result}</p><button type="button" className="primary-button full" onClick={onClose}>확인</button></> : <button className="primary-button full" disabled={busy}>{busy ? '초대 만드는 중…' : '초대 보내기'}</button>}
+        <small className="access-note">초대를 수락하기 전에는 반려견과 건강 데이터에 접근할 수 없습니다.</small>
+      </form>
+    </div>
+  )
+}
+
+function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onScanDocument, memberCount, legacyAvailable, onMigrate }) {
   const latestMeal = events.find((event) => event.type === 'meal')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
   const mealGrams = mealMatch ? mealMatch[0].replace(/[^\d.]/g, '') : null
   const lastRecord = events[0]
+  const latestMedicine = events.find((event) => event.type === 'medicine')
+  const activityRecorded = events.some((event) => event.type === 'activity')
+  const todayLabel = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
 
   return (
     <div className="screen home-screen">
-      <Header eyebrow="9월 30일 수요일" title={<>좋은 아침이에요, <span>{profile.name} 보호자님</span></>} />
+      <Header eyebrow={todayLabel} title={<>좋은 아침이에요, <span>{profile.name} 보호자님</span></>} />
+
+      {legacyAvailable && (
+        <section className="migration-banner">
+          <div><strong>기존 {profile.name} 기록을 내 가족 공간으로 옮길까요?</strong><p>이 브라우저의 프로필·타임라인·병원 기록을 한 번만 안전하게 이전해요.</p></div>
+          <button onClick={onMigrate}>기록 옮기기</button>
+        </section>
+      )}
 
       <section className="condition-card">
         <div className="condition-topline">
           <PetAvatar photo={profile.photo} name={profile.name} />
           <div className="condition-title">
             <p>{profile.name}의 오늘</p>
-            <h2>조금 더 지켜봐 주세요</h2>
+            <h2>{events.length ? '오늘 기록을 확인해 주세요' : '오늘 상태를 기록해 주세요'}</h2>
           </div>
           <button className="more-button" aria-label="더 보기"><MoreHorizontal size={21} /></button>
         </div>
         <div className="condition-stats">
           <div><strong>{profile.weight || '—'}{profile.weight && <small>kg</small>}</strong><span>현재 몸무게</span></div>
           <div><strong>{mealGrams || '—'}{mealGrams && <small>g</small>}</strong><span>최근 식사량</span></div>
-          <div><strong>보통</strong><span>활동량</span></div>
+          <div><strong>{activityRecorded ? '기록됨' : '미기록'}</strong><span>활동량</span></div>
         </div>
         <div className="care-message">
           <Sparkles size={17} />
           <div>
-            <p><strong>기록 기반 관찰</strong> · 어제 구토 기록이 있어 오늘 식사량과 활력을 함께 살펴봐요.</p>
-            <span>다음 행동 · 저녁 위장약을 오후 6:30에 챙겨주세요.</span>
+            <p><strong>기록 기반 관찰</strong> · {vomitCount > 0 ? '구토 기록이 있어 식사량과 활력을 함께 살펴봐요.' : '현재 선택한 반려견의 기록만 모아 보여드려요.'}</p>
+            <span>{latestMedicine ? `최근 투약 · ${latestMedicine.detail}` : '다음 행동 · 오늘 상태를 간단히 기록해 보세요.'}</span>
           </div>
         </div>
       </section>
 
       <section className="shared-care-card">
         <div className="shared-care-heading">
-          <div className="shared-care-title"><span><UsersRound size={18} /></span><div><p>가족과 함께</p><h2>오늘의 공동 돌봄</h2></div></div>
-          <strong className="pending-pill">1건 대기</strong>
+          <div className="shared-care-title"><span><UsersRound size={18} /></span><div><p>초대된 가족만 볼 수 있어요</p><h2>최근 가족 활동</h2></div></div>
+          <strong className="pending-pill">{memberCount}명 참여</strong>
         </div>
         <div className="shared-care-details">
-          <div><span>마지막 기록</span><strong>{lastRecord?.author || 'Theo님'} · {lastRecord?.time?.replace('오늘 ', '') || '오전 8:42'}</strong></div>
-          <div><span>다음 할 일</span><strong>저녁 위장약 · 오후 6:30</strong></div>
+          <div><span>마지막 기록</span><strong>{lastRecord ? `${honorificName(lastRecord.author || '보호자')} · ${lastRecord.time?.replace('오늘 ', '')}` : '아직 기록이 없어요'}</strong></div>
+          <div><span>공유 범위</span><strong>이 가족 공간의 활성 구성원</strong></div>
         </div>
       </section>
 
@@ -517,7 +991,7 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onSca
   )
 }
 
-function TimelineScreen({ events, petName, onChooseRecord, onDelete }) {
+function TimelineScreen({ events, petName, onChooseRecord, onDelete, onEdit, canManage }) {
   const [filter, setFilter] = useState('all')
   const [showMoreFilters, setShowMoreFilters] = useState(false)
   const filtered = filter === 'all' ? events : events.filter((event) => event.type === filter)
@@ -525,6 +999,7 @@ function TimelineScreen({ events, petName, onChooseRecord, onDelete }) {
     acc[event.date] = [...(acc[event.date] || []), event]
     return acc
   }, {})
+  Object.values(grouped).forEach((items) => items.sort((a, b) => getEventTimeMinutes(b) - getEventTimeMinutes(a)))
 
   return (
     <div className="screen">
@@ -548,7 +1023,7 @@ function TimelineScreen({ events, petName, onChooseRecord, onDelete }) {
           <section key={date}>
             <div className="date-divider"><span>{date}</span><i /></div>
             <div className="timeline-list">
-              {items.map((event) => <TimelineItem key={event.id} event={event} onDelete={onDelete} />)}
+              {items.map((event) => <TimelineItem key={event.id} event={event} onDelete={canManage(event) ? onDelete : undefined} onEdit={canManage(event) ? onEdit : undefined} />)}
             </div>
           </section>
         ))}
@@ -558,7 +1033,7 @@ function TimelineScreen({ events, petName, onChooseRecord, onDelete }) {
   )
 }
 
-function TimelineItem({ event, onDelete }) {
+function TimelineItem({ event, onDelete, onEdit }) {
   const type = recordTypes.find((item) => item.id === event.type) || customRecordType
   const Icon = type.icon
   return (
@@ -567,17 +1042,23 @@ function TimelineItem({ event, onDelete }) {
       <div className="timeline-copy">
         <div className="timeline-title"><strong>{event.title}</strong><time>{event.time.replace(`${event.date} `, '')}</time></div>
         <p>{event.detail}</p>
-        {event.author && <small className="timeline-author">{event.author} 기록</small>}
+        {event.author && <small className="timeline-author">{honorificName(event.author)}이 기록{event.authorCreatedAtLabel ? ` · 작성 ${event.authorCreatedAtLabel}` : ''}</small>}
         {event.note && <span>{event.note}</span>}
         {event.photo && <img className="timeline-photo" src={event.photo} alt={`${event.title} 첨부 사진`} />}
       </div>
-      {onDelete && <button className="delete-button" onClick={() => onDelete(event.id)} aria-label="기록 삭제"><Trash2 size={16} /></button>}
+      {(onEdit || onDelete) && <div className="record-card-actions">{onEdit && <button className="edit-button" onClick={() => onEdit(event)} aria-label="기록 수정"><Pencil size={15} /></button>}{onDelete && <button className="delete-button" onClick={() => onDelete(event.id)} aria-label="기록 삭제"><Trash2 size={16} /></button>}</div>}
     </article>
   )
 }
 
-function BriefingScreen({ count, copied, onCopy, onPrint, profile }) {
+function BriefingScreen({ count, copied, onCopy, onPrint, profile, events, hospitalRecords }) {
   const [period, setPeriod] = useState('24시간')
+  const latestVomit = events.find((event) => event.type === 'vomit')
+  const latestMeal = events.find((event) => event.type === 'meal')
+  const latestWater = events.find((event) => event.type === 'water')
+  const latestActivity = events.find((event) => event.type === 'activity')
+  const latestMedicine = events.find((event) => event.type === 'medicine')
+  const latestHospital = hospitalRecords[0]
   return (
     <div className="screen briefing-screen">
       <Header eyebrow="병원에 가기 전 준비" title="진료 브리핑" />
@@ -590,35 +1071,28 @@ function BriefingScreen({ count, copied, onCopy, onPrint, profile }) {
 
       <article className="briefing-document">
         <div className="document-heading">
-          <div><span>자동 요약</span><h2>반복되는 구토 증상</h2></div>
+          <div><span>자동 요약</span><h2>{count > 0 ? '최근 구토 기록 요약' : `${profile.name}의 최근 건강 요약`}</h2></div>
           <span className="generated-badge"><Sparkles size={14} /> 기록 기반</span>
         </div>
-        <div className="document-alert"><Activity size={19} /><p>최근 {period} 동안 구토가 <strong>{count}회</strong> 기록됐습니다.</p></div>
+        <div className="document-alert"><Activity size={19} /><p>{count > 0 ? <>최근 {period} 동안 구토가 <strong>{count}회</strong> 기록됐습니다.</> : <>선택한 기간에 구토 기록이 없습니다.</>}</p></div>
         <BriefingSection title="기본 정보">
           <ul>
-            <li><span>성별 · 중성화</span><strong>{profile.sex} · {profile.neutered}</strong></li>
+            <li><span>성별 · 중성화</span><strong>{profile.sex || '미입력'} · {profile.neutered || '미입력'}</strong></li>
             <li><span>현재 몸무게</span><strong>{profile.weight ? `${profile.weight}kg` : '미입력'}</strong></li>
             <li><span>알레르기</span><strong>{profile.allergies || '기록 없음'}</strong></li>
           </ul>
         </BriefingSection>
-        <BriefingSection title="증상 경과">
-          <ul>
-            <li><span>마지막 증상</span><strong>오늘 오전 8:42</strong></li>
-            <li><span>구토 양상</span><strong>노란색 거품, 소량</strong></li>
-            <li><span>동반 증상</span><strong>특이사항 없음</strong></li>
-          </ul>
-        </BriefingSection>
+        {latestVomit && <BriefingSection title="증상 경과"><ul><li><span>마지막 구토</span><strong>{latestVomit.time}</strong></li><li><span>보호자 관찰</span><strong>{latestVomit.detail}</strong></li><li><span>메모</span><strong>{latestVomit.note || '기록 없음'}</strong></li></ul></BriefingSection>}
         <BriefingSection title="식사 및 활동">
           <ul>
-            <li><span>식사량</span><strong>평소의 약 80%</strong></li>
-            <li><span>음수량</span><strong>평소와 비슷함</strong></li>
-            <li><span>활동량</span><strong>보통</strong></li>
+            <li><span>최근 식사</span><strong>{latestMeal?.detail || '기록 없음'}</strong></li>
+            <li><span>최근 음수</span><strong>{latestWater?.detail || '기록 없음'}</strong></li>
+            <li><span>최근 활동</span><strong>{latestActivity?.detail || '기록 없음'}</strong></li>
           </ul>
         </BriefingSection>
-        <BriefingSection title="복용 중인 약">
-          <div className="medicine-row"><div className="medicine-icon"><Pill size={18} /></div><div><strong>가스모틴 ½정</strong><p>하루 2회 · 식후 30분</p></div></div>
-        </BriefingSection>
-        <div className="question-box"><strong>수의사에게 물어볼 것</strong><p>공복성 구토일 가능성이 있는지, 사료 급여 간격을 조절해야 하는지 궁금해요.</p></div>
+        {latestMedicine && <BriefingSection title="최근 투약"><div className="medicine-row"><div className="medicine-icon"><Pill size={18} /></div><div><strong>{latestMedicine.detail}</strong><p>{latestMedicine.time}</p></div></div></BriefingSection>}
+        {latestHospital && <BriefingSection title="최근 병원 방문"><ul><li><span>방문일 · 병원</span><strong>{latestHospital.date} · {latestHospital.hospital}</strong></li><li><span>방문 이유</span><strong>{latestHospital.reason || latestHospital.diagnosis}</strong></li></ul></BriefingSection>}
+        <div className="question-box"><strong>기록 사용 안내</strong><p>이 요약은 {profile.name}의 기록만 모은 자료예요. 진료 시 실제 상태와 함께 수의사에게 보여주세요.</p></div>
       </article>
       <div className="briefing-actions">
         <button className="secondary-button" onClick={onPrint}><FileText size={18} /> PDF 저장</button>
@@ -632,8 +1106,12 @@ function BriefingSection({ title, children }) {
   return <section className="document-section"><h3>{title}</h3>{children}</section>
 }
 
-function ProfileScreen({ profile, onSave, onPhotoChange }) {
+function ProfileScreen({ profile, onSave, onPhotoChange, canEdit }) {
   const [draft, setDraft] = useState(profile)
+
+  useEffect(() => {
+    setDraft(profile)
+  }, [profile.id])
 
   const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
   const submit = (event) => {
@@ -646,15 +1124,16 @@ function ProfileScreen({ profile, onSave, onPhotoChange }) {
       <Header eyebrow="건강 기록의 기준 정보" title="반려견 프로필" />
 
       <section className="profile-hero">
-        <PetAvatar photo={profile.photo} name={draft.name || '반려견'} onPhotoChange={onPhotoChange} profile />
+        <PetAvatar photo={profile.photo} name={draft.name || '반려견'} onPhotoChange={canEdit ? onPhotoChange : undefined} profile />
         <div>
           <span>대표 사진</span>
           <h2>{draft.name || '이름을 입력해 주세요'}</h2>
-          <p>사진은 여기에서만 등록하거나 변경할 수 있어요.</p>
+          <p>{canEdit ? '사진은 여기에서만 등록하거나 변경할 수 있어요.' : '가족 공간 관리자만 프로필을 수정할 수 있어요.'}</p>
         </div>
       </section>
 
       <form className="profile-form" onSubmit={submit}>
+        <fieldset className="profile-fieldset" disabled={!canEdit}>
         <section className="profile-form-section">
           <div className="profile-section-title"><span>01</span><div><h3>기본 정보</h3><p>진료 기록과 브리핑에 표시돼요.</p></div></div>
           <div className="profile-grid">
@@ -686,16 +1165,18 @@ function ProfileScreen({ profile, onSave, onPhotoChange }) {
           <label className="profile-memo"><textarea value={draft.memo} onChange={(event) => update('memo', event.target.value)} placeholder="예: 낯선 사람을 무서워하고, 닭고기에 민감해요." /></label>
         </section>
 
-        <div className="profile-save-bar">
+        </fieldset>
+
+        {canEdit && <div className="profile-save-bar">
           <p>{draft.birthDate ? `${getAgeLabel(draft.birthDate)} · ` : ''}{draft.breed || '품종 미입력'} · {draft.weight ? `${draft.weight}kg` : '몸무게 미입력'}</p>
           <button className="primary-button" type="submit"><Save size={18} /> 프로필 저장</button>
-        </div>
+        </div>}
       </form>
     </div>
   )
 }
 
-function RecordsScreen({ records, total, onAdd }) {
+function RecordsScreen({ records, total, onAdd, onEdit, canEdit }) {
   const [expanded, setExpanded] = useState(null)
   return (
     <div className="screen records-screen">
@@ -709,12 +1190,14 @@ function RecordsScreen({ records, total, onAdd }) {
         <button className="outline-small" onClick={onAdd}><Plus size={15} /> 기록 추가</button>
       </div>
       <div className="record-list">
+        {records.length === 0 && <div className="records-empty"><Stethoscope size={23} /><strong>아직 병원 기록이 없어요</strong><p>이 반려견의 첫 방문 기록을 추가해 보세요.</p></div>}
         {records.map((record) => (
           <article className="record-card" key={record.id}>
             <div className="record-date"><CalendarDays size={18} /><span>{record.date}</span><span className={`status-pill ${record.source === 'manual' ? 'manual' : ''}`}>{record.status}</span></div>
             <h3>{record.hospital}</h3>
-            <div className="diagnosis"><Stethoscope size={17} /><div><span>{record.source === 'manual' ? '방문 이유' : '진단'}</span><strong>{record.reason || record.diagnosis}</strong></div></div>
+            <div className="diagnosis"><Stethoscope size={17} /><div><span>{record.source ? '방문 이유' : '진단'}</span><strong>{record.reason || record.diagnosis}</strong></div></div>
             <p>{record.items}</p>
+            <small className="timeline-author">{honorificName(record.author)}이 기록{record.authorCreatedAtLabel ? ` · 작성 ${record.authorCreatedAtLabel}` : ''}</small>
             {expanded === record.id && (
               record.source === 'manual' ? (
                 <div className="record-detail manual-record-detail">
@@ -724,6 +1207,11 @@ function RecordsScreen({ records, total, onAdd }) {
                   {record.memo && <span><b>메모</b>{record.memo}</span>}
                   {record.photo && <img src={record.photo} alt="병원 방문 첨부 사진" />}
                 </div>
+              ) : record.source === 'document' ? (
+                <div className="record-detail manual-record-detail">
+                  <span><b>등록 방식</b>영수증·처방전 촬영</span>
+                  {record.photo && <img src={record.photo} alt="등록한 병원 서류" />}
+                </div>
               ) : (
                 <div className="record-detail">
                   <span><b>결제 방법</b> 신용카드</span>
@@ -731,7 +1219,7 @@ function RecordsScreen({ records, total, onAdd }) {
                 </div>
               )
             )}
-            <div className="record-footer">{record.amount ? <strong>{formatWon(record.amount)}</strong> : <span className="cost-missing">비용 미입력</span>}<button onClick={() => setExpanded(expanded === record.id ? null : record.id)}>{expanded === record.id ? '접기' : '상세 보기'} <ChevronRight size={15} className={expanded === record.id ? 'rotate' : ''} /></button></div>
+            <div className="record-footer"><div>{record.amount ? <strong>{formatWon(record.amount)}</strong> : <span className="cost-missing">비용 미입력</span>}</div><div className="record-footer-actions">{canEdit(record) && <button onClick={() => onEdit(record)}><Pencil size={13} /> 수정</button>}<button onClick={() => setExpanded(expanded === record.id ? null : record.id)}>{expanded === record.id ? '접기' : '상세 보기'} <ChevronRight size={15} className={expanded === record.id ? 'rotate' : ''} /></button></div></div>
           </article>
         ))}
       </div>
@@ -786,9 +1274,33 @@ function RecordTypeButton({ item, onClick }) {
 function LogSheet({ type, onClose, onSave }) {
   const selected = recordTypes.find((item) => item.id === type) || customRecordType
   const isCustom = type === 'custom'
-  const [form, setForm] = useState({ type, title: '', time: new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }), appearance: '', amount: '', note: '', photo: '' })
+  const [form, setForm] = useState(() => {
+    const currentTime = getCurrentTimeParts()
+    return {
+      type,
+      title: '',
+      ...currentTime,
+      time: formatTimeParts(currentTime.period, currentTime.hour, currentTime.minute),
+      timeMinutes: toTimeMinutes(currentTime.period, currentTime.hour, currentTime.minute),
+      appearance: '',
+      amount: '',
+      note: '',
+      photo: '',
+    }
+  })
   const [photoName, setPhotoName] = useState('')
   const Icon = selected.icon
+
+  const updateTime = (key, value) => {
+    setForm((current) => {
+      const next = { ...current, [key]: value }
+      return {
+        ...next,
+        time: formatTimeParts(next.period, next.hour, next.minute),
+        timeMinutes: toTimeMinutes(next.period, next.hour, next.minute),
+      }
+    })
+  }
 
   const attachPhoto = async (file) => {
     if (!file) return
@@ -811,7 +1323,20 @@ function LogSheet({ type, onClose, onSave }) {
           <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
         </div>
         {isCustom && <label>기록 제목<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="예: 귀 청소, 기침, 피부 상태" /></label>}
-        <label>{type === 'weight' ? '측정 시간' : '발생 시간'}<input value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} /></label>
+        <div className="time-input-field">
+          <span className="time-input-label">{type === 'weight' ? '측정 시간' : '발생 시간'}</span>
+          <div className="time-input-row">
+            <div className="time-period-toggle" aria-label="오전 또는 오후 선택">
+              {['오전', '오후'].map((period) => <button type="button" key={period} aria-pressed={form.period === period} className={form.period === period ? 'selected' : ''} onClick={() => updateTime('period', period)}>{period}</button>)}
+            </div>
+            <div className="time-select-group">
+              <select aria-label="시 선택" value={form.hour} onChange={(event) => updateTime('hour', event.target.value)}>{Array.from({ length: 12 }, (_, index) => index + 1).map((hour) => <option key={hour} value={hour}>{hour}</option>)}</select>
+              <span>시</span>
+              <select aria-label="분 선택" value={form.minute} onChange={(event) => updateTime('minute', event.target.value)}>{Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => <option key={minute} value={minute}>{minute}</option>)}</select>
+              <span>분</span>
+            </div>
+          </div>
+        </div>
         {!isCustom && selected.fields.length > 0 && (
           <div className={`form-columns ${selected.fields.length === 1 ? 'single' : ''}`}>
             {selected.fields.map((field) => (
@@ -825,6 +1350,51 @@ function LogSheet({ type, onClose, onSave }) {
           {photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진 첨부하기 (선택)'}
         </label>
         <button className="primary-button full" type="submit">기록 저장</button>
+      </form>
+    </div>
+  )
+}
+
+function EditTimelineSheet({ event, onClose, onSave }) {
+  const occurred = new Date(event.occurredAt)
+  const hour24 = occurred.getHours()
+  const initialPeriod = hour24 >= 12 ? '오후' : '오전'
+  const [form, setForm] = useState({
+    period: initialPeriod,
+    hour: String(hour24 % 12 || 12),
+    minute: String(occurred.getMinutes()).padStart(2, '0'),
+    timeMinutes: hour24 * 60 + occurred.getMinutes(),
+    detail: event.detail || '',
+    note: event.note || '',
+    photo: event.photo || '',
+  })
+  const [photoName, setPhotoName] = useState(event.photo ? '기존 첨부 사진 유지' : '')
+
+  const updateTime = (key, value) => setForm((current) => {
+    const next = { ...current, [key]: value }
+    return { ...next, timeMinutes: toTimeMinutes(next.period, next.hour, next.minute) }
+  })
+  const attachPhoto = async (file) => {
+    if (!file) return
+    setPhotoName(file.name)
+    try {
+      const photo = await resizeImage(file)
+      setForm((current) => ({ ...current, photo }))
+    } catch {
+      setPhotoName(event.photo ? '기존 첨부 사진 유지' : '')
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(mouseEvent) => mouseEvent.target === mouseEvent.currentTarget && onClose()}>
+      <form className="bottom-sheet" onSubmit={(submitEvent) => { submitEvent.preventDefault(); onSave(form) }}>
+        <div className="sheet-handle" />
+        <div className="sheet-header"><div className="sheet-title-icon green"><Pencil size={20} /></div><div><p>내가 작성한 기록</p><h2>{event.title} 수정</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={21} /></button></div>
+        <div className="time-input-field"><span className="time-input-label">발생 시간</span><div className="time-input-row"><div className="time-period-toggle">{['오전', '오후'].map((period) => <button type="button" key={period} className={form.period === period ? 'selected' : ''} onClick={() => updateTime('period', period)}>{period}</button>)}</div><div className="time-select-group"><select aria-label="시 선택" value={form.hour} onChange={(changeEvent) => updateTime('hour', changeEvent.target.value)}>{Array.from({ length: 12 }, (_, index) => index + 1).map((hour) => <option key={hour} value={hour}>{hour}</option>)}</select><span>시</span><select aria-label="분 선택" value={form.minute} onChange={(changeEvent) => updateTime('minute', changeEvent.target.value)}>{Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => <option key={minute} value={minute}>{minute}</option>)}</select><span>분</span></div></div></div>
+        <label>관찰 내용<input required value={form.detail} onChange={(changeEvent) => setForm({ ...form, detail: changeEvent.target.value })} /></label>
+        <label>메모<textarea value={form.note} onChange={(changeEvent) => setForm({ ...form, note: changeEvent.target.value })} /></label>
+        <label className="photo-button"><input type="file" accept="image/*" onChange={(changeEvent) => attachPhoto(changeEvent.target.files?.[0])} />{photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진 첨부하기 (선택)'}</label>
+        <button className="primary-button full" type="submit">수정 내용 저장</button>
       </form>
     </div>
   )
@@ -856,11 +1426,11 @@ function HospitalAddSheet({ onClose, onSelect }) {
   )
 }
 
-function ManualHospitalSheet({ onClose, onSave }) {
-  const now = new Date()
-  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
-  const [form, setForm] = useState({ visitDate: localDate, hospital: '', reason: '', opinion: '', treatment: '', medication: '', cost: '', memo: '', photo: '' })
-  const [photoName, setPhotoName] = useState('')
+function ManualHospitalSheet({ onClose, onSave, initial = null }) {
+  const baseDate = initial?.visitedAt ? new Date(initial.visitedAt) : new Date()
+  const localDate = new Date(baseDate.getTime() - baseDate.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  const [form, setForm] = useState({ visitDate: localDate, hospital: initial?.hospital === '병원명 미입력' ? '' : initial?.hospital || '', reason: initial?.reason || '', opinion: initial?.opinion || '', treatment: initial?.treatment || '', medication: initial?.medication || '', cost: initial?.amount == null ? '' : String(initial.amount), memo: initial?.memo || '', photo: initial?.photo || '' })
+  const [photoName, setPhotoName] = useState(initial?.photo ? '기존 첨부 사진 유지' : '')
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
 
   const attachPhoto = async (file) => {
@@ -879,7 +1449,7 @@ function ManualHospitalSheet({ onClose, onSave }) {
         <div className="sheet-handle" />
         <div className="sheet-header">
           <div className="sheet-title-icon green"><Stethoscope size={21} /></div>
-          <div><p>보호자가 들은 내용을 그대로</p><h2>병원 방문 직접 기록</h2></div>
+          <div><p>보호자가 들은 내용을 그대로</p><h2>{initial ? '병원 방문 기록 수정' : '병원 방문 직접 기록'}</h2></div>
           <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
         </div>
         <div className="form-columns">
@@ -899,7 +1469,7 @@ function ManualHospitalSheet({ onClose, onSave }) {
           {photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '처방전·약 봉투·안내문 첨부 (선택)'}
         </label>
         <div className="form-safety-note"><FileText size={16} /><p>의학적 판단이 아닌, 병원에서 들은 내용을 가족과 공유하기 위한 기록이에요.</p></div>
-        <button className="primary-button full" type="submit">병원 기록 저장</button>
+        <button className="primary-button full" type="submit">{initial ? '수정 내용 저장' : '병원 기록 저장'}</button>
       </form>
     </div>
   )
@@ -907,6 +1477,16 @@ function ManualHospitalSheet({ onClose, onSave }) {
 
 function ReceiptSheet({ onClose, onSave }) {
   const [fileName, setFileName] = useState('')
+  const [photo, setPhoto] = useState('')
+  const attachPhoto = async (file) => {
+    if (!file) return
+    setFileName(file.name)
+    try {
+      setPhoto(await resizeImage(file))
+    } catch {
+      setFileName('')
+    }
+  }
   return (
     <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="bottom-sheet">
@@ -917,14 +1497,15 @@ function ReceiptSheet({ onClose, onSave }) {
           <button className="icon-button" onClick={onClose}><X size={21} /></button>
         </div>
         <label className={`upload-area ${fileName ? 'has-file' : ''}`}>
-          <input type="file" accept="image/*" onChange={(e) => setFileName(e.target.files?.[0]?.name || '')} />
+          <input type="file" accept="image/*" onChange={(event) => attachPhoto(event.target.files?.[0])} />
           {fileName ? <><Check size={26} /><strong>{fileName}</strong><span>사진을 선택했어요</span></> : <><Camera size={30} /><strong>영수증이나 처방전을 선택하세요</strong><span>이번 버전에서는 사진을 안전하게 보관해드려요</span></>}
         </label>
         <div className="privacy-note"><FileText size={17} /><p>사진은 진료 기록 정리에만 사용되며, 언제든 삭제할 수 있어요.</p></div>
-        <button className="primary-button full" disabled={!fileName} onClick={onSave}>서류 등록하기</button>
+        <button className="primary-button full" disabled={!photo} onClick={() => onSave(photo)}>서류 등록하기</button>
       </div>
     </div>
   )
 }
 
+export { loadInitialData }
 export default App
