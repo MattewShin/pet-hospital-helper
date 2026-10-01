@@ -390,7 +390,7 @@ function AuthScreen({ notice = '' }) {
     <main className="access-screen">
       <section className="access-card auth-card">
         <div className="brand-lockup"><div className="brand-mark"><PawPrint size={22} /></div><div><strong>도케</strong><span>DOG CARE, TOGETHER</span></div></div>
-        <div><p className="eyebrow">초대된 가족만 함께 보는 건강 기록</p><h1>{mode === 'login' ? '다시 만나서 반가워요' : '가족 건강 공간을 시작해요'}</h1></div>
+        <div><p className="eyebrow">함께 보는 우리 반려견 건강 기록</p><h1>{mode === 'login' ? '다시 만나서 반가워요' : '같이 기록을 시작해요'}</h1></div>
         <div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); setMessage('') }}>로그인</button><button className={mode === 'signup' ? 'active' : ''} onClick={() => { setMode('signup'); setError(''); setMessage('') }}>회원가입</button></div>
         <form onSubmit={submit}>
           {mode === 'signup' && <label>이름<input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="가족에게 표시할 이름" /></label>}
