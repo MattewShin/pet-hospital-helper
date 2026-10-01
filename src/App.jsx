@@ -22,6 +22,7 @@ import {
   Mail,
   MapPin,
   MoreHorizontal,
+  Palette,
   PawPrint,
   Pencil,
   Pill,
@@ -30,6 +31,7 @@ import {
   Scale,
   Save,
   Share2,
+  ShieldCheck,
   Sparkles,
   Stethoscope,
   SlidersHorizontal,
@@ -40,7 +42,22 @@ import {
   X,
 } from 'lucide-react'
 
-const defaultProfile = {
+const emptyPetProfile = {
+  name: '',
+  breed: '',
+  sex: '',
+  birthDate: '',
+  weight: '',
+  neutered: '',
+  allergies: '',
+  registrationNumber: '',
+  memo: '',
+  photo: '',
+}
+
+// 과거 춘식 케어 저장 키를 이전할 때만 사용하는 호환 기본값입니다.
+const legacyDefaultProfile = {
+  ...emptyPetProfile,
   name: '춘식',
   breed: '비숑 프리제',
   sex: '수컷',
@@ -110,6 +127,32 @@ function getEventTimeMinutes(event) {
   return match ? toTimeMinutes(match[1], match[2], match[3]) : -1
 }
 
+const briefingPeriods = { '24시간': 24, '3일': 72, '7일': 168 }
+
+function eventsInPeriod(events, period) {
+  const cutoff = Date.now() - (briefingPeriods[period] || 24) * 60 * 60 * 1000
+  return events.filter((event) => {
+    const timestamp = new Date(event.occurredAt || event.authorCreatedAt || '').getTime()
+    return Number.isFinite(timestamp) && timestamp >= cutoff
+  })
+}
+
+function isEventToday(event) {
+  if (event.localDate) return event.localDate === getLocalDateKey()
+  if (event.occurredAt) return getLocalDateKey(new Date(event.occurredAt)) === getLocalDateKey()
+  return event.date === '오늘'
+}
+
+function recordLabel(type) {
+  return recordTypes.find((item) => item.id === type)?.label || '기타 관찰'
+}
+
+function recordCountSummary(events) {
+  if (!events.length) return '기록 없음'
+  const counts = events.reduce((result, event) => ({ ...result, [event.type]: (result[event.type] || 0) + 1 }), {})
+  return Object.entries(counts).map(([type, count]) => `${recordLabel(type)} ${count}건`).join(' · ')
+}
+
 const symptoms = [
   { id: 'vomit', label: '구토', icon: Activity, color: 'coral', fields: [{ key: 'appearance', label: '상태', placeholder: '예: 노란색 거품' }, { key: 'amount', label: '양', placeholder: '예: 소량' }] },
   { id: 'meal', label: '식사', icon: Apple, color: 'green', fields: [{ key: 'appearance', label: '음식·사료', placeholder: '예: 건식 사료' }, { key: 'amount', label: '섭취량', placeholder: '예: 42g 또는 80%' }] },
@@ -126,15 +169,97 @@ const additionalRecordTypes = [
 
 const customRecordType = { id: 'custom', label: '직접 입력', icon: FileText, color: 'blue', fields: [] }
 const recordTypes = [...symptoms, ...additionalRecordTypes, customRecordType]
+const bannerMetricOptions = [
+  { id: 'weight', label: '현재 체중', description: '프로필에 저장된 최근 몸무게', icon: Scale },
+  { id: 'meal', label: '최근 식사량', description: '가장 최근에 확인한 식사 기록', icon: Apple },
+  { id: 'activity', label: '활동량', description: '오늘 남긴 산책·활동 기록', icon: Footprints },
+  { id: 'vaccination', label: '다음 예방접종', description: '예정된 예방접종 방문 일정', icon: Sparkles },
+  { id: 'medication', label: '복약 일정', description: '앞으로 예정된 투약 기록', icon: Pill },
+  { id: 'appointment', label: '다음 진료 일정', description: '예정된 병원 방문 일정', icon: CalendarDays },
+]
+const bannerThemeOptions = [
+  { id: 'green', label: '짙은 녹색', description: '도케 기본 테마' },
+  { id: 'beige', label: '따뜻한 베이지', description: '차분하고 부드러운 테마' },
+  { id: 'sky', label: '맑은 하늘색', description: '깨끗하고 편안한 테마' },
+]
+const defaultBannerPreference = { metricIds: ['weight', 'meal', 'activity'], bannerTheme: 'green' }
+const healthRoutineCategories = [
+  { id: 'heartworm', label: '사상충 예방' },
+  { id: 'parasite', label: '내·외부 구충' },
+  { id: 'vaccination', label: '예방접종' },
+  { id: 'checkup', label: '건강검진' },
+  { id: 'grooming', label: '미용·위생' },
+  { id: 'other', label: '기타' },
+]
+const reminderOptions = [
+  { days: 0, label: '예정 당일' },
+  { days: 1, label: '1일 전' },
+  { days: 3, label: '3일 전' },
+  { days: 7, label: '7일 전' },
+]
+
+function dateKeyFromDate(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function healthCategoryLabel(category) {
+  return healthRoutineCategories.find((item) => item.id === category)?.label || '기타'
+}
+
+function healthRecurrenceLabel(routine) {
+  if (routine.recurrenceUnit === 'once') return '한 번만'
+  if (routine.recurrenceUnit === 'year') return '매년'
+  const unit = { day: '일', week: '주', month: '개월' }[routine.recurrenceUnit]
+  return routine.recurrenceInterval === 1 ? { day: '매일', week: '매주', month: '매월' }[routine.recurrenceUnit] : `${routine.recurrenceInterval}${unit}마다`
+}
+
+function healthDueState(routine) {
+  const today = new Date(`${dateKeyFromDate()}T12:00:00`)
+  const due = new Date(`${routine.nextDueDate}T12:00:00`)
+  const days = Math.round((due - today) / 86400000)
+  if (days < 0) return { id: 'overdue', label: `${Math.abs(days)}일 지남`, days }
+  if (days === 0) return { id: 'today', label: '오늘 예정', days }
+  return { id: 'upcoming', label: `${days}일 후`, days }
+}
+
+function isHealthRoutineAlert(routine) {
+  const state = healthDueState(routine)
+  return state.days <= Math.max(...(routine.reminderDays || [0]))
+}
+
+function addHealthInterval(dateKey, unit, interval) {
+  if (unit === 'once') return ''
+  const date = new Date(`${dateKey}T12:00:00`)
+  if (unit === 'day') date.setDate(date.getDate() + interval)
+  if (unit === 'week') date.setDate(date.getDate() + interval * 7)
+  if (unit === 'month') date.setMonth(date.getMonth() + interval)
+  if (unit === 'year') date.setFullYear(date.getFullYear() + interval)
+  return dateKeyFromDate(date)
+}
+
+function formatHealthDate(value) {
+  if (!value) return '미정'
+  return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(`${value}T12:00:00`))
+}
+
+function useEscapeClose(onClose) {
+  useEffect(() => {
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+}
 
 const initialEvents = [
   {
     id: 1,
-    type: 'vomit',
-    title: '구토',
+    type: 'condition',
+    title: '컨디션',
     time: '오늘 오전 8:42',
-    detail: '노란색 거품 · 소량',
-    note: '아침 식사 전, 기운은 평소와 비슷해요.',
+    detail: '평소보다 잠이 많음',
+    note: '식사와 산책 반응을 함께 관찰하고 있어요.',
     date: '오늘',
     author: 'Theo님',
   },
@@ -160,11 +285,11 @@ const initialEvents = [
   },
   {
     id: 4,
-    type: 'vomit',
-    title: '구토',
+    type: 'stool',
+    title: '배변',
     time: '어제 오후 4:15',
-    detail: '먹은 음식물 · 중간량',
-    note: '산책 후 물을 급하게 마셨어요.',
+    detail: '평소와 비슷함 · 보통',
+    note: '산책 중 배변했어요.',
     date: '어제',
     author: '배우자님',
   },
@@ -175,8 +300,8 @@ const initialHospitalRecords = [
     id: 1,
     date: '2026. 09. 28',
     hospital: '다정한 동물병원',
-    diagnosis: '급성 위염 의심',
-    items: '진찰 · 복부 X-ray · 약 처방',
+    diagnosis: '컨디션 변화 상담',
+    items: '진찰 · 기본 검사 · 약 처방',
     amount: 86400,
     status: '진료 완료',
   },
@@ -193,8 +318,8 @@ const initialHospitalRecords = [
     id: 3,
     date: '2026. 08. 19',
     hospital: '24시 봄 동물의료센터',
-    diagnosis: '구토 및 탈수',
-    items: '혈액검사 · 수액 처치',
+    diagnosis: '피부 상태 상담',
+    items: '피부 검사 · 처치',
     amount: 178200,
     status: '진료 완료',
   },
@@ -229,13 +354,13 @@ function loadInitialData() {
     return { pets: savedPets, selectedPetId, events: savedEvents, hospitalRecords: savedHospitalRecords }
   }
 
-  let legacyProfile = defaultProfile
+  let legacyProfile = legacyDefaultProfile
   try {
     const savedProfile = JSON.parse(window.localStorage.getItem('chunsik-care-profile') || 'null')
     const legacyPhoto = window.localStorage.getItem('chunsik-care-photo') || ''
-    legacyProfile = savedProfile ? { ...defaultProfile, ...savedProfile } : { ...defaultProfile, photo: legacyPhoto }
+    legacyProfile = savedProfile ? { ...legacyDefaultProfile, ...savedProfile } : { ...legacyDefaultProfile, photo: legacyPhoto }
   } catch {
-    legacyProfile = defaultProfile
+    legacyProfile = legacyDefaultProfile
   }
 
   const chunsik = { ...legacyProfile, id: CHUNSIK_ID }
@@ -479,7 +604,7 @@ function WorkspaceSetup({ session, workspace }) {
         <label className="setup-label">가족 공간 이름<input required value={name} onChange={(event) => setName(event.target.value)} maxLength="80" /></label>
         {error && <p className="form-message error">{error}</p>}
         {workspace.legacyAvailable ? (
-          <div className="legacy-choice"><div><strong>기존 춘식 기록을 내 가족 공간으로 옮길까요?</strong><p>동의하면 가족 공간을 만든 뒤 이 브라우저의 로컬 기록을 한 번만 업로드해요.</p></div><button className="primary-button full" disabled={!name.trim() || Boolean(busy)} onClick={() => create(true)}>{busy === 'migrate' ? '옮기는 중…' : '가족 공간 만들고 기록 옮기기'}</button><button className="secondary-button" disabled={!name.trim() || Boolean(busy)} onClick={() => create(false)}>기록 없이 시작</button></div>
+          <div className="legacy-choice"><div><strong>기존 반려견 기록을 내 가족 공간으로 옮길까요?</strong><p>동의하면 가족 공간을 만든 뒤 이 브라우저의 반려견별 로컬 기록을 한 번만 업로드해요.</p></div><button className="primary-button full" disabled={!name.trim() || Boolean(busy)} onClick={() => create(true)}>{busy === 'migrate' ? '옮기는 중…' : '가족 공간 만들고 기록 옮기기'}</button><button className="secondary-button" disabled={!name.trim() || Boolean(busy)} onClick={() => create(false)}>기록 없이 시작</button></div>
         ) : <button className="primary-button full" disabled={!name.trim() || Boolean(busy)} onClick={() => create(false)}>{busy === 'create' ? '만드는 중…' : '새 가족 공간 만들기'}</button>}
         <button className="text-action" onClick={() => supabase.auth.signOut()}><LogOut size={15} /> 로그아웃</button>
       </section>
@@ -527,7 +652,7 @@ function DokeApp({ session }) {
         closeSheet={() => setSheet(null)}
         onSave={async (newPet) => {
           try {
-            await workspace.actions.createPet({ ...defaultProfile, ...newPet })
+            await workspace.actions.createPet({ ...emptyPetProfile, ...newPet })
             setSheet(null)
           } catch (error) {
             setToast(error.message || '반려견을 추가하지 못했어요')
@@ -540,7 +665,7 @@ function DokeApp({ session }) {
   const allHospitalRecords = data.hospitalRecords.filter((record) => record.petId === profile.id)
   const mealRoutines = workspace.mealRoutines.filter((routine) => routine.petId === profile.id).sort((a, b) => a.timeMinutes - b.timeMinutes)
   const todayMealRecords = events.filter((event) => event.source === 'meal_record' && event.localDate === getLocalDateKey())
-  const vomitCount = events.filter((event) => event.type === 'vomit').length
+  const bannerPreference = workspace.petViewPreferences.find((preference) => preference.petId === profile.id) || defaultBannerPreference
   const totalSpent = allHospitalRecords.reduce((sum, record) => sum + (record.amount || 0), 0)
 
   const notify = (message) => {
@@ -657,6 +782,17 @@ function DokeApp({ session }) {
 
   const closeMealRoutine = () => setSheet(sheet?.returnTo === 'meal' ? { type: 'meal' } : null)
 
+  const saveBannerPreference = async (preference) => {
+    await workspace.actions.savePetViewPreference(profile.id, preference)
+    setSheet(null)
+    notify('대표 상태 배너 설정을 저장했어요')
+  }
+
+  const openPetProfile = () => {
+    setSheet(null)
+    setActiveTab('profile')
+  }
+
   const openAccount = () => {
     setSheet(null)
     setActiveTab('account')
@@ -664,7 +800,7 @@ function DokeApp({ session }) {
 
   const addPet = async (newPet) => {
     try {
-      await workspace.actions.createPet({ ...defaultProfile, ...newPet })
+      await workspace.actions.createPet({ ...emptyPetProfile, ...newPet })
       setSheet(null)
       setActiveTab('home')
       notify(`${newPet.name} 프로필을 추가했어요`)
@@ -702,10 +838,16 @@ function DokeApp({ session }) {
     }
   }
 
-  const copyBriefing = async () => {
-    const latestMedicine = events.find((event) => event.type === 'medicine')
+  const copyBriefing = async (period = '24시간') => {
+    const periodEvents = eventsInPeriod(events, period)
     const latestHospital = allHospitalRecords[0]
-    const text = `${profile.name} · ${profile.breed || '견종 미입력'} · ${profile.sex || '성별 미입력'} · ${getAgeLabel(profile.birthDate)} · ${profile.weight || '-'}kg\n중성화: ${profile.neutered || '미입력'} · 알레르기: ${profile.allergies || '기록 없음'}\n\n[최근 기록]\n- 최근 구토 ${vomitCount}회\n- 최근 투약: ${latestMedicine?.detail || '기록 없음'}\n- 최근 병원 방문: ${latestHospital ? `${latestHospital.date} ${latestHospital.reason || latestHospital.diagnosis}` : '기록 없음'}`
+    const eventLines = periodEvents.length
+      ? periodEvents.slice(0, 12).map((event) => `- ${event.title || recordLabel(event.type)}: ${event.detail || '세부 내용 미기록'} (${event.time || '시간 미기록'})`).join('\n')
+      : '- 선택한 기간의 건강 기록 없음'
+    const hospitalLines = latestHospital
+      ? `- 방문일·병원: ${latestHospital.date} · ${latestHospital.hospital}\n- 방문 목적: ${latestHospital.reason || latestHospital.diagnosis || '기록 없음'}\n- 진료 내용·소견: ${latestHospital.opinion || '기록 없음'}\n- 검사·처치: ${latestHospital.treatment || latestHospital.items || '기록 없음'}\n- 처방약: ${latestHospital.medication || '기록 없음'}\n- 보호자 메모: ${latestHospital.memo || '기록 없음'}`
+      : '- 등록된 병원 방문 기록 없음'
+    const text = `${profile.name} · ${profile.breed || '견종 미입력'} · ${profile.sex || '성별 미입력'} · ${getAgeLabel(profile.birthDate)} · ${profile.weight || '-'}kg\n중성화: ${profile.neutered || '미입력'} · 알레르기: ${profile.allergies || '기록 없음'}\n보호자 메모: ${profile.memo || '기록 없음'}\n\n[${period} 건강 기록 요약]\n${recordCountSummary(periodEvents)}\n${eventLines}\n\n[가장 최근 병원 방문]\n${hospitalLines}`
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
@@ -743,7 +885,7 @@ function DokeApp({ session }) {
         <div className="side-help">
           <HeartPulse size={20} />
           <strong>응급 상황인가요?</strong>
-          <p>반복 구토와 무기력이 함께 나타나면 바로 병원에 문의하세요.</p>
+          <p>평소와 다른 심한 변화가 있거나 응급 상황이 의심되면 바로 동물병원에 문의하세요.</p>
           <button className="sidebar-logout" onClick={() => supabase.auth.signOut()}><LogOut size={14} /> 로그아웃</button>
         </div>
       </aside>
@@ -757,10 +899,13 @@ function DokeApp({ session }) {
         {activeTab === 'home' && (
           <HomeScreen
             events={events}
-            vomitCount={vomitCount}
             onQuickAdd={(type) => setSheet({ type })}
             onNavigate={setActiveTab}
             profile={profile}
+            hospitalRecords={allHospitalRecords}
+            bannerPreference={bannerPreference}
+            onOpenBannerMenu={() => setSheet({ type: 'banner-menu' })}
+            onOpenTodayRecords={() => setActiveTab('timeline')}
             onScanDocument={() => setSheet({ type: 'receipt' })}
             memberCount={workspace.members.length}
             legacyAvailable={workspace.legacyAvailable && workspace.isOwner}
@@ -771,7 +916,7 @@ function DokeApp({ session }) {
           <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: 'timeline-edit', event })} canEdit={(event) => event.source !== 'meal_record' && (workspace.isOwner || event.createdBy === session.user.id)} canDelete={(event) => workspace.isOwner || event.createdBy === session.user.id} />
         )}
         {activeTab === 'briefing' && (
-          <BriefingScreen count={vomitCount} copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} />
+          <BriefingScreen copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} />
         )}
         {activeTab === 'records' && (
           <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} onEdit={(record) => setSheet({ type: 'hospital-edit', record })} canEdit={(record) => workspace.isOwner || record.createdBy === session.user.id} />
@@ -803,7 +948,11 @@ function DokeApp({ session }) {
         ))}
       </nav>
 
-      {sheet?.type === 'pet-switcher' ? (
+      {sheet?.type === 'banner-menu' ? (
+        <BannerMenuSheet petName={profile.name} onClose={() => setSheet(null)} onChoose={(section) => section === 'profile' ? openPetProfile() : setSheet({ type: 'banner-settings', section })} />
+      ) : sheet?.type === 'banner-settings' ? (
+        <BannerSettingsSheet petName={profile.name} section={sheet.section} preference={bannerPreference} onBack={() => setSheet({ type: 'banner-menu' })} onClose={() => setSheet(null)} onSave={saveBannerPreference} />
+      ) : sheet?.type === 'pet-switcher' ? (
         <PetSwitcherSheet pets={data.pets} selectedPetId={data.selectedPetId} onClose={() => setSheet(null)} onSelect={selectPet} onAdd={() => setSheet({ type: 'pet-add' })} canManage={workspace.isOwner} onAccount={openAccount} onLogout={() => supabase.auth.signOut()} />
       ) : sheet?.type === 'pet-add' ? (
         <AddPetSheet onClose={() => setSheet(null)} onSave={addPet} />
@@ -1127,14 +1276,127 @@ function InviteFamilySheet({ session, workspace, onClose }) {
   )
 }
 
-function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onScanDocument, memberCount, legacyAvailable, onMigrate }) {
+function BannerMenuSheet({ petName, onClose, onChoose }) {
+  useEscapeClose(onClose)
+  const menuItems = [
+    { id: 'metrics', label: '표시 항목 설정', description: '배너에 보여 줄 요약 지표 3개를 선택해요.', icon: SlidersHorizontal },
+    { id: 'theme', label: '배너 스타일', description: '나에게 편안한 색상 테마를 선택해요.', icon: Palette },
+    { id: 'profile', label: '반려견 프로필 수정', description: `${petName}의 기본·건강 정보를 수정해요.`, icon: Pencil },
+  ]
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="bottom-sheet banner-menu-sheet" role="dialog" aria-modal="true" aria-labelledby="banner-menu-title">
+        <div className="sheet-handle" />
+        <div className="sheet-header">
+          <div className="sheet-title-icon green"><MoreHorizontal size={21} /></div>
+          <div><p>{petName}의 홈 화면</p><h2 id="banner-menu-title">대표 상태 배너 설정</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="배너 설정 메뉴 닫기"><X size={21} /></button>
+        </div>
+        <div className="banner-menu-list">
+          {menuItems.map((item, index) => {
+            const Icon = item.icon
+            return <button type="button" key={item.id} autoFocus={index === 0} onClick={() => onChoose(item.id)}><span><Icon size={19} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div><ChevronRight size={17} /></button>
+          })}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function BannerSettingsSheet({ petName, section, preference, onBack, onClose, onSave }) {
+  useEscapeClose(onClose)
+  const [draft, setDraft] = useState({ metricIds: [...(preference.metricIds || defaultBannerPreference.metricIds)], bannerTheme: preference.bannerTheme || 'green' })
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const isMetrics = section === 'metrics'
+
+  const toggleMetric = (id) => {
+    setError('')
+    if (draft.metricIds.includes(id)) {
+      setDraft((current) => ({ ...current, metricIds: current.metricIds.filter((metricId) => metricId !== id) }))
+      return
+    }
+    if (draft.metricIds.length >= 3) {
+      setError('표시 항목은 3개까지 선택할 수 있어요. 먼저 다른 항목을 해제해 주세요.')
+      return
+    }
+    setDraft((current) => ({ ...current, metricIds: [...current.metricIds, id] }))
+  }
+
+  const submit = async () => {
+    if (draft.metricIds.length !== 3) {
+      setError('대표 상태 배너에 표시할 항목을 정확히 3개 선택해 주세요.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await onSave(draft)
+    } catch (saveError) {
+      setError(saveError.message || '배너 설정을 저장하지 못했어요.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="bottom-sheet banner-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="banner-settings-title">
+        <div className="sheet-handle" />
+        <div className="sheet-header">
+          <button type="button" className="icon-button banner-back-button" onClick={onBack} aria-label="배너 설정 메뉴로 돌아가기"><ArrowLeft size={20} /></button>
+          <div><p>{petName}의 개인 화면 설정</p><h2 id="banner-settings-title">{isMetrics ? '표시 항목 설정' : '배너 스타일'}</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="배너 설정 닫기"><X size={21} /></button>
+        </div>
+
+        {isMetrics ? <>
+          <div className="banner-setting-intro"><strong>{draft.metricIds.length}/3 선택</strong><p>건강 데이터는 각 기록과 프로필에서 읽어 오며, 이 화면에서는 수정되지 않아요.</p></div>
+          <div className="banner-metric-options">
+            {bannerMetricOptions.map((item) => {
+              const Icon = item.icon
+              const selectedIndex = draft.metricIds.indexOf(item.id)
+              return <button type="button" key={item.id} className={selectedIndex >= 0 ? 'selected' : ''} aria-pressed={selectedIndex >= 0} onClick={() => toggleMetric(item.id)}><span><Icon size={18} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div>{selectedIndex >= 0 && <i>{selectedIndex + 1}</i>}</button>
+            })}
+          </div>
+        </> : <>
+          <div className="banner-setting-intro"><strong>색상 테마</strong><p>테마는 현재 로그인한 사용자의 화면에만 적용돼요.</p></div>
+          <div className="banner-theme-options">
+            {bannerThemeOptions.map((theme) => <button type="button" key={theme.id} className={draft.bannerTheme === theme.id ? 'selected' : ''} aria-pressed={draft.bannerTheme === theme.id} onClick={() => setDraft((current) => ({ ...current, bannerTheme: theme.id }))}><span className={`theme-swatch ${theme.id}`} /><div><strong>{theme.label}</strong><small>{theme.description}</small></div>{draft.bannerTheme === theme.id && <Check size={18} />}</button>)}
+          </div>
+        </>}
+
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        <button type="button" className="primary-button full" disabled={busy || (isMetrics && draft.metricIds.length !== 3)} onClick={submit}>{busy ? '저장 중…' : '설정 저장'}</button>
+      </section>
+    </div>
+  )
+}
+
+function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, memberCount, legacyAvailable, onMigrate }) {
   const latestMeal = events.find((event) => event.type === 'meal' && event.mealStatus !== 'skipped')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
-  const mealGrams = mealMatch ? mealMatch[0].replace(/[^\d.]/g, '') : null
   const lastRecord = events[0]
   const latestMedicine = events.find((event) => event.type === 'medicine')
-  const activityRecorded = events.some((event) => event.type === 'activity')
+  const todayEvents = events.filter(isEventToday)
+  const latestActivity = todayEvents.find((event) => event.type === 'activity')
+  const latestObservation = events.find((event) => ['condition', 'custom', 'stool', 'vomit', 'weight'].includes(event.type))
+  const latestHospital = hospitalRecords[0]
   const todayLabel = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
+  const now = Date.now()
+  const futureHospitals = hospitalRecords.filter((record) => new Date(record.visitedAt || '').getTime() > now).sort((a, b) => new Date(a.visitedAt) - new Date(b.visitedAt))
+  const nextVaccination = futureHospitals.find((record) => /예방접종|백신/.test(`${record.reason || ''} ${record.diagnosis || ''}`))
+  const nextAppointment = futureHospitals[0]
+  const nextMedication = events.filter((event) => event.type === 'medicine' && new Date(event.occurredAt || '').getTime() > now).sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt))[0]
+  const formatSchedule = (value) => value ? new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric' }).format(new Date(value)) : '미등록'
+  const activityMeasure = latestActivity?.detail?.match(/\d+(?:\.\d+)?\s*(?:분|km|m)/i)?.[0]
+  const metricValues = {
+    weight: { value: profile.weight ? `${profile.weight}kg` : '미입력', label: '현재 체중' },
+    meal: { value: mealMatch ? mealMatch[0].replace(/\s/g, '') : latestMeal ? '기록됨' : '미기록', label: '최근 식사량' },
+    activity: { value: activityMeasure || (latestActivity ? '기록됨' : '미기록'), label: '오늘 활동량' },
+    vaccination: { value: formatSchedule(nextVaccination?.visitedAt), label: '다음 예방접종' },
+    medication: { value: formatSchedule(nextMedication?.occurredAt), label: '복약 일정' },
+    appointment: { value: formatSchedule(nextAppointment?.visitedAt), label: '다음 진료 일정' },
+  }
+  const selectedMetrics = (bannerPreference.metricIds || defaultBannerPreference.metricIds).map((id) => metricValues[id]).filter(Boolean).slice(0, 3)
 
   return (
     <div className="screen home-screen">
@@ -1147,25 +1409,25 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onSca
         </section>
       )}
 
-      <section className="condition-card">
+      <section className={`condition-card theme-${bannerPreference.bannerTheme || 'green'}`}>
         <div className="condition-topline">
-          <PetAvatar photo={profile.photo} name={profile.name} />
-          <div className="condition-title">
-            <p>{profile.name}의 오늘</p>
-            <h2>{events.length ? '오늘 기록을 확인해 주세요' : '오늘 상태를 기록해 주세요'}</h2>
-          </div>
-          <button className="more-button" aria-label="더 보기"><MoreHorizontal size={21} /></button>
+          <button type="button" className="condition-main-action" onClick={onOpenTodayRecords} aria-label={`${profile.name}의 오늘 기록 화면 열기`}>
+            <PetAvatar photo={profile.photo} name={profile.name} />
+            <div className="condition-title">
+              <p>{profile.name}의 오늘</p>
+              <h2>{todayEvents.length ? `오늘 ${todayEvents.length}건을 함께 기록했어요` : '오늘 컨디션을 기록해 주세요'}</h2>
+            </div>
+          </button>
+          <button type="button" className="more-button" onClick={onOpenBannerMenu} aria-label="대표 상태 배너 설정 열기" aria-haspopup="dialog"><MoreHorizontal size={21} /></button>
         </div>
         <div className="condition-stats">
-          <div><strong>{profile.weight || '—'}{profile.weight && <small>kg</small>}</strong><span>현재 몸무게</span></div>
-          <div><strong>{mealGrams || '—'}{mealGrams && <small>g</small>}</strong><span>최근 식사량</span></div>
-          <div><strong>{activityRecorded ? '기록됨' : '미기록'}</strong><span>활동량</span></div>
+          {selectedMetrics.map((metric) => <div key={metric.label}><strong>{metric.value}</strong><span>{metric.label}</span></div>)}
         </div>
         <div className="care-message">
           <Sparkles size={17} />
           <div>
-            <p><strong>기록 기반 관찰</strong> · {vomitCount > 0 ? '구토 기록이 있어 식사량과 활력을 함께 살펴봐요.' : '현재 선택한 반려견의 기록만 모아 보여드려요.'}</p>
-            <span>{latestMedicine ? `최근 투약 · ${latestMedicine.detail}` : '다음 행동 · 오늘 상태를 간단히 기록해 보세요.'}</span>
+            <p><strong>기록 기반 관찰</strong> · {latestObservation ? `${latestObservation.title} · ${latestObservation.detail}` : todayEvents.length ? '오늘의 식사·활동·투약 등 생활 기록을 함께 살펴봐요.' : '평소와 비교해 달라진 컨디션이나 생활 모습을 남겨보세요.'}</p>
+            <span>{latestMedicine ? `최근 투약 · ${latestMedicine.detail}` : latestHospital ? `최근 병원 방문 목적 · ${latestHospital.reason || latestHospital.diagnosis}` : '다음 행동 · 오늘의 식사, 활동, 배변 또는 컨디션을 기록해 보세요.'}</span>
           </div>
         </div>
       </section>
@@ -1217,7 +1479,7 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onSca
 
       <section className="briefing-banner">
         <div className="banner-icon"><Stethoscope size={22} /></div>
-        <div className="briefing-banner-copy"><span>수의사에게 바로 보여주세요</span><strong>{profile.name}의 최근 건강 요약</strong><p>최근 구토 기록, 식사량, 복용약, 체중 변화가 포함돼요.</p></div>
+        <div className="briefing-banner-copy"><span>수의사에게 바로 보여주세요</span><strong>{profile.name}의 건강·진료 요약</strong><p>컨디션과 생활 기록, 투약, 보호자 메모, 최근 병원 방문 목적을 함께 정리해요.</p></div>
         <button onClick={() => onNavigate('briefing')}>공유용 리포트 만들기 <ChevronRight size={15} /></button>
       </section>
     </div>
@@ -1285,13 +1547,15 @@ function TimelineItem({ event, onDelete, onEdit }) {
   )
 }
 
-function BriefingScreen({ count, copied, onCopy, onPrint, profile, events, hospitalRecords }) {
+function BriefingScreen({ copied, onCopy, onPrint, profile, events, hospitalRecords }) {
   const [period, setPeriod] = useState('24시간')
-  const latestVomit = events.find((event) => event.type === 'vomit')
-  const latestMeal = events.find((event) => event.type === 'meal')
-  const latestWater = events.find((event) => event.type === 'water')
-  const latestActivity = events.find((event) => event.type === 'activity')
-  const latestMedicine = events.find((event) => event.type === 'medicine')
+  const periodEvents = eventsInPeriod(events, period)
+  const latestMeal = periodEvents.find((event) => event.type === 'meal')
+  const latestWater = periodEvents.find((event) => event.type === 'water')
+  const latestActivity = periodEvents.find((event) => event.type === 'activity')
+  const latestStool = periodEvents.find((event) => event.type === 'stool')
+  const latestMedicine = periodEvents.find((event) => event.type === 'medicine')
+  const observations = periodEvents.filter((event) => ['condition', 'vomit', 'weight', 'custom'].includes(event.type)).slice(0, 4)
   const latestHospital = hospitalRecords[0]
   return (
     <div className="screen briefing-screen">
@@ -1305,32 +1569,40 @@ function BriefingScreen({ count, copied, onCopy, onPrint, profile, events, hospi
 
       <article className="briefing-document">
         <div className="document-heading">
-          <div><span>자동 요약</span><h2>{count > 0 ? '최근 구토 기록 요약' : `${profile.name}의 최근 건강 요약`}</h2></div>
+          <div><span>건강 기록 요약</span><h2>{profile.name}의 건강·진료 브리핑</h2></div>
           <span className="generated-badge"><Sparkles size={14} /> 기록 기반</span>
         </div>
-        <div className="document-alert"><Activity size={19} /><p>{count > 0 ? <>최근 {period} 동안 구토가 <strong>{count}회</strong> 기록됐습니다.</> : <>선택한 기간에 구토 기록이 없습니다.</>}</p></div>
+        <div className="document-alert health-summary"><ClipboardList size={19} /><p>{periodEvents.length ? <>최근 {period} 동안 <strong>{periodEvents.length}건</strong>의 기록이 있습니다. {recordCountSummary(periodEvents)}</> : <>선택한 기간에 저장된 건강 기록이 없습니다. 현재 컨디션과 방문 목적을 수의사에게 함께 설명해 주세요.</>}</p></div>
         <BriefingSection title="기본 정보">
           <ul>
             <li><span>성별 · 중성화</span><strong>{profile.sex || '미입력'} · {profile.neutered || '미입력'}</strong></li>
             <li><span>현재 몸무게</span><strong>{profile.weight ? `${profile.weight}kg` : '미입력'}</strong></li>
             <li><span>알레르기</span><strong>{profile.allergies || '기록 없음'}</strong></li>
+            <li><span>보호자 메모</span><strong>{profile.memo || '기록 없음'}</strong></li>
           </ul>
         </BriefingSection>
-        {latestVomit && <BriefingSection title="증상 경과"><ul><li><span>마지막 구토</span><strong>{latestVomit.time}</strong></li><li><span>보호자 관찰</span><strong>{latestVomit.detail}</strong></li><li><span>메모</span><strong>{latestVomit.note || '기록 없음'}</strong></li></ul></BriefingSection>}
-        <BriefingSection title="식사 및 활동">
+        <BriefingSection title="컨디션 및 보호자 관찰">
+          <ul>
+            {observations.length ? observations.map((event) => <li key={`${event.source || 'timeline'}-${event.id}`}><span>{event.title || recordLabel(event.type)}</span><strong>{event.detail || '세부 내용 미기록'} · {event.time || '시간 미기록'}{event.note ? ` · ${event.note}` : ''}</strong></li>) : <li><span>선택 기간</span><strong>컨디션·기타 관찰 기록 없음</strong></li>}
+          </ul>
+        </BriefingSection>
+        <BriefingSection title="식사·음수·활동·배변">
           <ul>
             <li><span>최근 식사</span><strong>{latestMeal?.detail || '기록 없음'}</strong></li>
             <li><span>최근 음수</span><strong>{latestWater?.detail || '기록 없음'}</strong></li>
             <li><span>최근 활동</span><strong>{latestActivity?.detail || '기록 없음'}</strong></li>
+            <li><span>최근 배변</span><strong>{latestStool?.detail || '기록 없음'}</strong></li>
           </ul>
         </BriefingSection>
-        {latestMedicine && <BriefingSection title="최근 투약"><div className="medicine-row"><div className="medicine-icon"><Pill size={18} /></div><div><strong>{latestMedicine.detail}</strong><p>{latestMedicine.time}</p></div></div></BriefingSection>}
-        {latestHospital && <BriefingSection title="최근 병원 방문"><ul><li><span>방문일 · 병원</span><strong>{latestHospital.date} · {latestHospital.hospital}</strong></li><li><span>방문 이유</span><strong>{latestHospital.reason || latestHospital.diagnosis}</strong></li></ul></BriefingSection>}
-        <div className="question-box"><strong>기록 사용 안내</strong><p>이 요약은 {profile.name}의 기록만 모은 자료예요. 진료 시 실제 상태와 함께 수의사에게 보여주세요.</p></div>
+        <BriefingSection title="투약 정보"><div className="medicine-row"><div className="medicine-icon"><Pill size={18} /></div><div><strong>{latestMedicine?.detail || '선택한 기간의 투약 기록 없음'}</strong><p>{latestMedicine?.time || '복용 중인 약이 있다면 진료 시 별도로 알려주세요.'}</p></div></div></BriefingSection>
+        <BriefingSection title="가장 최근 병원 방문과 목적">
+          {latestHospital ? <ul><li><span>방문일 · 병원</span><strong>{latestHospital.date} · {latestHospital.hospital}</strong></li><li><span>방문 목적</span><strong>{latestHospital.reason || latestHospital.diagnosis || '기록 없음'}</strong></li><li><span>진료 내용·소견</span><strong>{latestHospital.opinion || '기록 없음'}</strong></li><li><span>검사·처치</span><strong>{latestHospital.treatment || latestHospital.items || '기록 없음'}</strong></li><li><span>처방약</span><strong>{latestHospital.medication || '기록 없음'}</strong></li><li><span>메모</span><strong>{latestHospital.memo || '기록 없음'}</strong></li></ul> : <ul><li><span>병원 기록</span><strong>등록된 방문 기록 없음</strong></li></ul>}
+        </BriefingSection>
+        <div className="question-box"><strong>진료실에서 이렇게 활용하세요</strong><p>현재 가장 걱정되는 변화와 이번 방문 목적을 먼저 말한 뒤, 이 요약에서 식사·활동·배변·투약의 평소 대비 변화를 함께 보여주세요. 이 자료는 진단이 아닌 {profile.name}의 보호자 기록입니다.</p></div>
       </article>
       <div className="briefing-actions">
         <button className="secondary-button" onClick={onPrint}><FileText size={18} /> PDF 저장</button>
-        <button className="primary-button" onClick={onCopy}>{copied ? <Check size={18} /> : <Share2 size={18} />}{copied ? '복사했어요' : '공유하기'}</button>
+        <button className="primary-button" onClick={() => onCopy(period)}>{copied ? <Check size={18} /> : <Share2 size={18} />}{copied ? '복사했어요' : '공유하기'}</button>
       </div>
     </div>
   )
@@ -1371,7 +1643,7 @@ function ProfileScreen({ profile, onSave, onPhotoChange, canEdit, mealRoutines =
         <section className="profile-form-section">
           <div className="profile-section-title"><span>01</span><div><h3>기본 정보</h3><p>진료 기록과 브리핑에 표시돼요.</p></div></div>
           <div className="profile-grid">
-            <label className="full-field">이름 <input required value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="예: 춘식" /></label>
+            <label className="full-field">이름 <input required value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="예: 반려견 이름" /></label>
             <label>품종 <input required list="dog-breeds" value={draft.breed} onChange={(event) => update('breed', event.target.value)} placeholder="예: 비숑 프리제" /></label>
             <datalist id="dog-breeds"><option value="비숑 프리제" /><option value="포메라니안" /><option value="말티즈" /><option value="푸들" /><option value="골든 리트리버" /><option value="믹스견" /></datalist>
             <label>생년월일 <input type="date" value={draft.birthDate} onChange={(event) => update('birthDate', event.target.value)} /></label>
@@ -1843,7 +2115,7 @@ function ManualHospitalSheet({ onClose, onSave, initial = null }) {
           <label><span>방문 날짜 <em>필수</em></span><input required type="date" value={form.visitDate} onChange={(event) => update('visitDate', event.target.value)} /></label>
           <label>병원명<input value={form.hospital} onChange={(event) => update('hospital', event.target.value)} placeholder="예: 다정한 동물병원" /></label>
         </div>
-        <label><span>방문 이유 <em>필수</em></span><input required value={form.reason} onChange={(event) => update('reason', event.target.value)} placeholder="예: 구토 증상 상담" /></label>
+        <label><span>방문 이유 <em>필수</em></span><input required value={form.reason} onChange={(event) => update('reason', event.target.value)} placeholder="예: 평소와 다른 컨디션 변화 상담" /></label>
         <label>진료 내용·소견<textarea value={form.opinion} onChange={(event) => update('opinion', event.target.value)} placeholder="병원에서 들은 내용을 그대로 적어주세요" /></label>
         <div className="form-columns">
           <label>검사·처치<input value={form.treatment} onChange={(event) => update('treatment', event.target.value)} placeholder="예: 진찰, 복부 X-ray" /></label>

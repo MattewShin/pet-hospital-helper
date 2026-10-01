@@ -115,6 +115,48 @@ create unique index if not exists meal_records_one_routine_result_per_day
 create index if not exists meal_records_pet_occurred_at
   on public.meal_records (pet_id, occurred_at desc);
 
+create table if not exists public.health_routines (
+  id uuid primary key default gen_random_uuid(),
+  pet_id uuid not null references public.pets(id) on delete cascade,
+  created_by uuid not null references public.profiles(id),
+  title text not null check (char_length(title) between 1 and 80),
+  category text not null check (category in ('heartworm', 'parasite', 'vaccination', 'checkup', 'grooming', 'other')),
+  next_due_date date not null,
+  recurrence_unit text not null default 'once' check (recurrence_unit in ('once', 'day', 'week', 'month', 'year')),
+  recurrence_interval smallint not null default 1 check (recurrence_interval between 1 and 365),
+  reminder_days smallint[] not null default array[0]::smallint[],
+  medication_name text,
+  dosage text,
+  notes text,
+  active boolean not null default true,
+  last_completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (cardinality(reminder_days) between 1 and 4),
+  check (reminder_days <@ array[0, 1, 3, 7]::smallint[])
+);
+create index if not exists health_routines_pet_due_date
+  on public.health_routines (pet_id, active, next_due_date);
+
+create table if not exists public.health_routine_completions (
+  id uuid primary key default gen_random_uuid(),
+  routine_id uuid not null,
+  pet_id uuid not null references public.pets(id) on delete cascade,
+  completed_by uuid not null references public.profiles(id),
+  completed_at timestamptz not null default now(),
+  completed_local_date date not null,
+  scheduled_for date not null,
+  next_due_date date,
+  title text not null,
+  category text not null,
+  medication_name text,
+  dosage text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+create index if not exists health_routine_completions_pet_completed_at
+  on public.health_routine_completions (pet_id, completed_at desc);
+
 create table if not exists public.hospital_records (
   id uuid primary key default gen_random_uuid(),
   pet_id uuid not null references public.pets(id) on delete cascade,
@@ -139,6 +181,18 @@ create table if not exists public.data_migrations (
   source text not null,
   migrated_at timestamptz not null default now(),
   unique (user_id, source)
+);
+
+create table if not exists public.pet_view_preferences (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  pet_id uuid not null references public.pets(id) on delete cascade,
+  metric_ids text[] not null default array['weight', 'meal', 'activity']::text[],
+  banner_theme text not null default 'green',
+  updated_at timestamptz not null default now(),
+  primary key (user_id, pet_id),
+  check (cardinality(metric_ids) = 3),
+  check (metric_ids <@ array['weight', 'meal', 'activity', 'vaccination', 'medication', 'appointment']::text[]),
+  check (banner_theme in ('green', 'beige', 'sky'))
 );
 
 create or replace function public.handle_new_user()
@@ -219,6 +273,48 @@ $$;
 create or replace function public.pet_household(target_pet uuid)
 returns uuid language sql stable security definer set search_path = public as $$
   select household_id from public.pets where id = target_pet;
+$$;
+
+create or replace function public.protect_health_routine_identity()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.pet_id is distinct from old.pet_id
+    or new.created_by is distinct from old.created_by
+    or new.created_at is distinct from old.created_at then
+    raise exception 'Health routine identity is immutable';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists protect_health_routine_identity_trigger on public.health_routines;
+create trigger protect_health_routine_identity_trigger before update on public.health_routines
+for each row execute function public.protect_health_routine_identity();
+
+create or replace function public.complete_health_routine(target_routine_id uuid, completion_local_date date, requested_next_due_date date default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare target public.health_routines%rowtype;
+declare calculated_next_due date;
+declare completion_id uuid;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  if completion_local_date is null then raise exception 'Completion date is required'; end if;
+  select * into target from public.health_routines where id = target_routine_id for update;
+  if target.id is null then raise exception 'Health routine not found'; end if;
+  if not target.active then raise exception 'Health routine is inactive'; end if;
+  if not public.is_active_household_member(public.pet_household(target.pet_id)) then raise exception 'Access denied'; end if;
+  if target.recurrence_unit = 'once' then calculated_next_due := null;
+  elsif requested_next_due_date is not null then calculated_next_due := requested_next_due_date;
+  elsif target.recurrence_unit = 'day' then calculated_next_due := completion_local_date + target.recurrence_interval;
+  elsif target.recurrence_unit = 'week' then calculated_next_due := completion_local_date + (target.recurrence_interval * 7);
+  elsif target.recurrence_unit = 'month' then calculated_next_due := (completion_local_date + make_interval(months => target.recurrence_interval))::date;
+  elsif target.recurrence_unit = 'year' then calculated_next_due := (completion_local_date + make_interval(years => target.recurrence_interval))::date;
+  end if;
+  insert into public.health_routine_completions (routine_id, pet_id, completed_by, completed_local_date, scheduled_for, next_due_date, title, category, medication_name, dosage, notes)
+  values (target.id, target.pet_id, auth.uid(), completion_local_date, target.next_due_date, calculated_next_due, target.title, target.category, target.medication_name, target.dosage, target.notes)
+  returning id into completion_id;
+  update public.health_routines set last_completed_at = now(), next_due_date = coalesce(calculated_next_due, next_due_date), active = (recurrence_unit <> 'once'), updated_at = now() where id = target.id;
+  return completion_id;
+end;
 $$;
 
 create or replace function public.replace_meal_routines(target_pet_id uuid, routine_items jsonb)
@@ -346,8 +442,11 @@ alter table public.pets enable row level security;
 alter table public.timeline_records enable row level security;
 alter table public.meal_routines enable row level security;
 alter table public.meal_records enable row level security;
+alter table public.health_routines enable row level security;
+alter table public.health_routine_completions enable row level security;
 alter table public.hospital_records enable row level security;
 alter table public.data_migrations enable row level security;
+alter table public.pet_view_preferences enable row level security;
 
 create policy "profiles_select_shared" on public.profiles for select to authenticated
   using (id = auth.uid() or public.shares_household(id));
@@ -396,6 +495,16 @@ create policy "meal_records_insert_member" on public.meal_records for insert to 
 create policy "meal_records_delete_author_or_owner" on public.meal_records for delete to authenticated
   using (public.is_active_household_member(public.pet_household(pet_id)) and (created_by = auth.uid() or public.is_household_owner(public.pet_household(pet_id))));
 
+create policy "health_routines_select_member" on public.health_routines for select to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)));
+create policy "health_routines_insert_member" on public.health_routines for insert to authenticated
+  with check (created_by = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
+create policy "health_routines_update_member" on public.health_routines for update to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)))
+  with check (public.is_active_household_member(public.pet_household(pet_id)));
+create policy "health_routine_completions_select_member" on public.health_routine_completions for select to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)));
+
 create policy "timeline_select_member" on public.timeline_records for select to authenticated
   using (public.is_active_household_member(public.pet_household(pet_id)));
 create policy "timeline_insert_member" on public.timeline_records for insert to authenticated
@@ -422,6 +531,16 @@ create policy "migrations_insert_self" on public.data_migrations for insert to a
 create policy "migrations_update_self" on public.data_migrations for update to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid() and public.is_active_household_member(household_id));
 
+create policy "pet_view_preferences_select_self" on public.pet_view_preferences for select to authenticated
+  using (user_id = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
+create policy "pet_view_preferences_insert_self" on public.pet_view_preferences for insert to authenticated
+  with check (user_id = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
+create policy "pet_view_preferences_update_self" on public.pet_view_preferences for update to authenticated
+  using (user_id = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)))
+  with check (user_id = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
+create policy "pet_view_preferences_delete_self" on public.pet_view_preferences for delete to authenticated
+  using (user_id = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
+
 insert into storage.buckets (id, name, public) values ('pet-media', 'pet-media', false)
 on conflict (id) do update set public = false;
 create policy "pet_media_select_members" on storage.objects for select to authenticated
@@ -443,6 +562,7 @@ revoke all on function public.pet_household(uuid) from public;
 revoke all on function public.create_household(text) from public;
 revoke all on function public.accept_invitation(uuid) from public;
 revoke all on function public.replace_meal_routines(uuid, jsonb) from public;
+revoke all on function public.complete_health_routine(uuid, date, date) from public;
 grant execute on function public.is_active_household_member(uuid) to authenticated;
 grant execute on function public.is_household_owner(uuid) to authenticated;
 grant execute on function public.has_pending_household_invitation(uuid) to authenticated;
@@ -451,6 +571,7 @@ grant execute on function public.pet_household(uuid) to authenticated;
 grant execute on function public.create_household(text) to authenticated;
 grant execute on function public.accept_invitation(uuid) to authenticated;
 grant execute on function public.replace_meal_routines(uuid, jsonb) to authenticated;
+grant execute on function public.complete_health_routine(uuid, date, date) to authenticated;
 
 do $$ begin
   alter publication supabase_realtime add table public.pets;
@@ -469,6 +590,15 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter publication supabase_realtime add table public.meal_routines;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.pet_view_preferences;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.health_routines;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.health_routine_completions;
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter publication supabase_realtime add table public.meal_records;

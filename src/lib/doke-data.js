@@ -149,6 +149,46 @@ function hospitalFromRow(row, author) {
   }
 }
 
+function healthRoutineFromRow(row) {
+  return {
+    id: row.id,
+    petId: row.pet_id,
+    createdBy: row.created_by,
+    title: row.title,
+    category: row.category,
+    nextDueDate: row.next_due_date,
+    recurrenceUnit: row.recurrence_unit,
+    recurrenceInterval: Number(row.recurrence_interval),
+    reminderDays: row.reminder_days || [0],
+    medicationName: row.medication_name || '',
+    dosage: row.dosage || '',
+    notes: row.notes || '',
+    active: row.active,
+    lastCompletedAt: row.last_completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function healthCompletionFromRow(row, author) {
+  return {
+    id: row.id,
+    routineId: row.routine_id,
+    petId: row.pet_id,
+    completedBy: row.completed_by,
+    completedByName: author?.display_name || author?.email || '가족',
+    completedAt: row.completed_at,
+    completedLocalDate: row.completed_local_date,
+    scheduledFor: row.scheduled_for,
+    nextDueDate: row.next_due_date,
+    title: row.title,
+    category: row.category,
+    medicationName: row.medication_name || '',
+    dosage: row.dosage || '',
+    notes: row.notes || '',
+  }
+}
+
 async function signedMediaUrl(path) {
   if (!path) return ''
   if (path.startsWith('data:') || path.startsWith('http')) return path
@@ -199,7 +239,7 @@ export function readLegacyData() {
 
 export function useDokeData(session) {
   const user = session.user
-  const [state, setState] = useState({ loading: true, error: '', households: [], household: null, membership: null, pets: [], selectedPetId: '', events: [], hospitalRecords: [], mealRoutines: [], members: [], invitations: [], pendingInvitations: [], profile: null, legacyAvailable: false })
+  const [state, setState] = useState({ loading: true, error: '', households: [], household: null, membership: null, pets: [], selectedPetId: '', events: [], hospitalRecords: [], mealRoutines: [], healthRoutines: [], healthRoutineCompletions: [], petViewPreferences: [], members: [], invitations: [], pendingInvitations: [], profile: null, legacyAvailable: false })
 
   const load = useCallback(async () => {
     try {
@@ -222,18 +262,21 @@ export function useDokeData(session) {
       const { data: petRows, error: petsError } = await supabase.from('pets').select('*').eq('household_id', household.id).order('created_at')
       if (petsError) throw petsError
       const petIds = (petRows || []).map((pet) => pet.id)
-      const [timelineResponse, mealRecordResponse, hospitalResponse, mealRoutineResponse, membersResponse, invitationsResponse, migrationResponse] = await Promise.all([
+      const [timelineResponse, mealRecordResponse, hospitalResponse, mealRoutineResponse, healthRoutineResponse, healthCompletionResponse, preferenceResponse, membersResponse, invitationsResponse, migrationResponse] = await Promise.all([
         petIds.length ? supabase.from('timeline_records').select('*').in('pet_id', petIds).order('occurred_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
         petIds.length ? supabase.from('meal_records').select('*').in('pet_id', petIds).order('occurred_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
         petIds.length ? supabase.from('hospital_records').select('*').in('pet_id', petIds).order('visited_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
         petIds.length ? supabase.from('meal_routines').select('*').in('pet_id', petIds).order('time_minutes') : Promise.resolve({ data: [], error: null }),
+        petIds.length ? supabase.from('health_routines').select('*').in('pet_id', petIds).order('next_due_date') : Promise.resolve({ data: [], error: null }),
+        petIds.length ? supabase.from('health_routine_completions').select('*').in('pet_id', petIds).order('completed_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+        petIds.length ? supabase.from('pet_view_preferences').select('*').eq('user_id', user.id).in('pet_id', petIds) : Promise.resolve({ data: [], error: null }),
         supabase.from('household_members').select('*').eq('household_id', household.id).eq('status', 'ACTIVE').order('joined_at'),
         supabase.from('invitations').select('*').eq('household_id', household.id).order('created_at', { ascending: false }),
         supabase.from('data_migrations').select('id').eq('user_id', user.id).eq('source', 'doke-local-v1').maybeSingle(),
       ])
-      const firstError = [timelineResponse, mealRecordResponse, hospitalResponse, mealRoutineResponse, membersResponse, invitationsResponse].find((response) => response.error)?.error
+      const firstError = [timelineResponse, mealRecordResponse, hospitalResponse, mealRoutineResponse, healthRoutineResponse, healthCompletionResponse, preferenceResponse, membersResponse, invitationsResponse].find((response) => response.error)?.error
       if (firstError) throw firstError
-      const creatorIds = [...new Set([...(timelineResponse.data || []), ...(mealRecordResponse.data || []), ...(hospitalResponse.data || []), ...(membersResponse.data || [])].map((item) => item.created_by || item.user_id).filter(Boolean))]
+      const creatorIds = [...new Set([...(timelineResponse.data || []), ...(mealRecordResponse.data || []), ...(hospitalResponse.data || []), ...(healthCompletionResponse.data || []), ...(membersResponse.data || [])].map((item) => item.created_by || item.completed_by || item.user_id).filter(Boolean))]
       const { data: profileRows } = creatorIds.length ? await supabase.from('profiles').select('*').in('id', creatorIds) : { data: [] }
       const profileMap = new Map((profileRows || []).map((item) => [item.id, item]))
       const pets = await Promise.all((petRows || []).map(async (row) => petFromRow(row, await signedMediaUrl(row.photo_url))))
@@ -246,8 +289,11 @@ export function useDokeData(session) {
       const events = [...timelineEvents, ...mealEvents].sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt))
       const hospitalRecords = await Promise.all((hospitalResponse.data || []).map(async (row) => ({ ...hospitalFromRow(row, profileMap.get(row.created_by)), photo: await signedMediaUrl(row.photo_url) })))
       const mealRoutines = (mealRoutineResponse.data || []).map((row) => ({ id: row.id, petId: row.pet_id, timeMinutes: row.time_minutes, foodName: row.food_name || '사료', amountGrams: Number(row.amount_grams), active: row.active !== false, sortOrder: row.sort_order }))
+      const healthRoutines = (healthRoutineResponse.data || []).map(healthRoutineFromRow)
+      const healthRoutineCompletions = (healthCompletionResponse.data || []).map((row) => healthCompletionFromRow(row, profileMap.get(row.completed_by)))
+      const petViewPreferences = (preferenceResponse.data || []).map((row) => ({ petId: row.pet_id, metricIds: row.metric_ids, bannerTheme: row.banner_theme }))
       const members = (membersResponse.data || []).map((member) => ({ ...member, profile: profileMap.get(member.user_id) || null }))
-      setState({ loading: false, error: '', households: householdChoices, household, membership, pets, selectedPetId, events, hospitalRecords, mealRoutines, members, invitations: invitationsResponse.data || [], pendingInvitations: pendingInvitations || [], profile, legacyAvailable: Boolean(readLegacyData() && !migrationResponse.data) })
+      setState({ loading: false, error: '', households: householdChoices, household, membership, pets, selectedPetId, events, hospitalRecords, mealRoutines, healthRoutines, healthRoutineCompletions, petViewPreferences, members, invitations: invitationsResponse.data || [], pendingInvitations: pendingInvitations || [], profile, legacyAvailable: Boolean(readLegacyData() && !migrationResponse.data) })
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error: error.message || '데이터를 불러오지 못했습니다.' }))
     }
@@ -262,6 +308,9 @@ export function useDokeData(session) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meal_records' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'hospital_records' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meal_routines' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'health_routines' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'health_routine_completions' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pet_view_preferences', filter: `user_id=eq.${user.id}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'household_members' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'invitations' }, load)
       .subscribe()
@@ -314,11 +363,71 @@ export function useDokeData(session) {
       if (error) throw error
       await load()
     },
+    async savePetViewPreference(petId, preference) {
+      if (!state.pets.some((pet) => pet.id === petId)) throw new Error('접근할 수 없는 반려견입니다.')
+      const allowedMetrics = ['weight', 'meal', 'activity', 'vaccination', 'medication', 'appointment']
+      const metricIds = [...new Set(preference.metricIds || [])]
+      if (metricIds.length !== 3 || metricIds.some((id) => !allowedMetrics.includes(id))) throw new Error('표시 항목 3개를 선택해 주세요.')
+      if (!['green', 'beige', 'sky'].includes(preference.bannerTheme)) throw new Error('지원하지 않는 배너 테마입니다.')
+      const nextPreference = { petId, metricIds, bannerTheme: preference.bannerTheme }
+      setState((current) => ({ ...current, petViewPreferences: [...current.petViewPreferences.filter((item) => item.petId !== petId), nextPreference] }))
+      const { error } = await supabase.from('pet_view_preferences').upsert({ user_id: user.id, pet_id: petId, metric_ids: metricIds, banner_theme: preference.bannerTheme, updated_at: new Date().toISOString() }, { onConflict: 'user_id,pet_id' })
+      if (error) {
+        await load()
+        throw error
+      }
+    },
     async replaceMealRoutines(petId, routines) {
       if (!isOwner) throw new Error('관리자만 식사 루틴을 수정할 수 있습니다.')
       if (!state.pets.some((pet) => pet.id === petId)) throw new Error('접근할 수 없는 반려견입니다.')
       const routineItems = routines.map((routine) => ({ id: routine.id, timeMinutes: Number(routine.timeMinutes), foodName: routine.foodName, amountGrams: Number(routine.amountGrams), active: routine.active !== false }))
       const { error } = await supabase.rpc('replace_meal_routines', { target_pet_id: petId, routine_items: routineItems })
+      if (error) throw error
+      await load()
+    },
+    async createHealthRoutine(routine) {
+      if (!state.pets.some((pet) => pet.id === routine.petId)) throw new Error('접근할 수 없는 반려견입니다.')
+      const { error } = await supabase.from('health_routines').insert({
+        pet_id: routine.petId,
+        created_by: user.id,
+        title: routine.title,
+        category: routine.category,
+        next_due_date: routine.nextDueDate,
+        recurrence_unit: routine.recurrenceUnit,
+        recurrence_interval: routine.recurrenceInterval,
+        reminder_days: routine.reminderDays,
+        medication_name: routine.medicationName || null,
+        dosage: routine.dosage || null,
+        notes: routine.notes || null,
+      })
+      if (error) throw error
+      await load()
+    },
+    async updateHealthRoutine(routine) {
+      if (!state.pets.some((pet) => pet.id === routine.petId)) throw new Error('접근할 수 없는 반려견입니다.')
+      const { error } = await supabase.from('health_routines').update({
+        title: routine.title,
+        category: routine.category,
+        next_due_date: routine.nextDueDate,
+        recurrence_unit: routine.recurrenceUnit,
+        recurrence_interval: routine.recurrenceInterval,
+        reminder_days: routine.reminderDays,
+        medication_name: routine.medicationName || null,
+        dosage: routine.dosage || null,
+        notes: routine.notes || null,
+        active: routine.active !== false,
+        updated_at: new Date().toISOString(),
+      }).eq('id', routine.id)
+      if (error) throw error
+      await load()
+    },
+    async postponeHealthRoutine(routineId, nextDueDate) {
+      const { error } = await supabase.from('health_routines').update({ next_due_date: nextDueDate, updated_at: new Date().toISOString() }).eq('id', routineId)
+      if (error) throw error
+      await load()
+    },
+    async completeHealthRoutine(routineId, completionLocalDate, nextDueDate) {
+      const { error } = await supabase.rpc('complete_health_routine', { target_routine_id: routineId, completion_local_date: completionLocalDate, requested_next_due_date: nextDueDate || null })
       if (error) throw error
       await load()
     },
