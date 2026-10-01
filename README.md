@@ -6,7 +6,8 @@
 
 - 이메일 회원가입·로그인과 Google·네이버·카카오 OAuth, 로그아웃
 - 반려견 전환 메뉴에서 진입하는 내 계정 표시 이름·소셜 아바타 관리
-- 반려견별 반복 식사 시간·급여량 루틴과 식사 기록 자동 입력
+- 반려견별 식사 예정 루틴과 보호자 확인 기반 실제 식사 기록
+- 예방약·접종·검진 등의 건강 루틴, 앱 내 예정 알림과 완료 이력
 - 가족 공간 생성과 OWNER/MEMBER 역할
 - 관리자 초대·초대 취소·구성원 내보내기, 초대받은 사용자의 수락
 - 가족 공간별 다견 프로필과 반려견별 타임라인·병원 기록·진료 브리핑 분리
@@ -18,14 +19,14 @@
 ## 1. Supabase 설정
 
 1. Supabase 프로젝트를 생성합니다.
-2. 새 Supabase 프로젝트라면 최신 내용이 합쳐진 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)만 실행합니다. 이미 `001`을 실행한 기존 프로젝트는 `001`을 다시 실행하지 말고, 아직 적용하지 않은 증분 마이그레이션을 `002 → 003 → 004 → 005 → 006 → 007` 순서로 실행합니다.
+2. 새 Supabase 프로젝트라면 최신 내용이 합쳐진 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)만 실행합니다. 이미 `001`을 실행한 기존 프로젝트는 `001`을 다시 실행하지 말고, 아직 적용하지 않은 증분 마이그레이션을 `002 → 003 → 004 → 005 → 006 → 007 → 008` 순서로 실행합니다.
 3. Authentication → Providers에서 Email 로그인을 켭니다.
 4. Authentication → URL Configuration에서 다음을 설정합니다.
    - Site URL: 실제 Vercel 주소(예: `https://doke.example.com`)
    - Redirect URLs: 로컬 주소와 Vercel 주소(예: `http://localhost:5173/**`, `https://doke.example.com/**`)
 5. 실제 초대 메일 발송이 필요하면 Authentication → SMTP Settings에 운영용 SMTP를 설정합니다. Supabase 기본 메일 발송은 개발/요율 제한이 있을 수 있습니다.
 
-마이그레이션은 `profiles`, `households`, `household_members`, `invitations`, `pets`, `timeline_records`, `hospital_records`, `data_migrations` 테이블과 비공개 `pet-media` 버킷을 만듭니다.
+마이그레이션은 사용자·가족·반려견·타임라인·병원 기록 외에 `meal_routines`, `meal_records`, `health_routines`, `health_routine_completions`, `pet_view_preferences` 테이블과 비공개 `pet-media` 버킷을 만듭니다.
 
 ### RLS 요약
 
@@ -166,6 +167,14 @@ Production, Preview, Development에 각각 실제로 사용할 URL과 공개 플
 ## 9. 대표 상태 배너 설정
 
 홈의 점 3개 메뉴에서 요약 지표 3개와 배너 색상 테마를 선택할 수 있습니다. 설정은 `pet_view_preferences`에 사용자 ID와 반려견 ID 조합으로 저장되므로 같은 가족 공간의 다른 구성원 화면에는 영향을 주지 않습니다. 배너는 프로필·타임라인·병원 기록의 값을 읽기만 하며 설정 메뉴에서 건강 데이터를 수정하지 않습니다.
+
+## 10. 건강 루틴 · 예방 관리
+
+`반려견 프로필 → 건강 루틴 관리`에서 사상충 예방, 구충, 예방접종, 건강검진, 미용·위생 등의 일정을 반려견별로 등록합니다. 홈과 알림 종에는 사전 알림 시점에 도달한 일정과 지연된 일정이 표시됩니다.
+
+예정 정보는 `health_routines`, 보호자가 `완료`를 누른 실제 이력은 `health_routine_completions`에 당시 제목·분류·약·용량·메모의 스냅샷으로 분리 저장됩니다. 반복 일정의 다음 예정일은 실제 완료일을 기준으로 계산되며 저장 전에 수정할 수 있습니다. `다음에`는 예정일만 바꾸고 완료 이력을 만들지 않습니다.
+
+`202610010008_health_routines.sql`은 가족 공간의 `ACTIVE` 구성원만 루틴을 조회·등록·수정·완료할 수 있도록 RLS와 완료 RPC를 추가합니다. 이번 구현은 앱 내부 표시만 제공하며 브라우저가 닫힌 상태의 푸시, Cron, Edge Function, 외부 알림 발송은 포함하지 않습니다.
 
 ## 보안 주의사항
 

@@ -353,6 +353,13 @@ export function useDokeData(session) {
       if (error) throw error
       await load()
     },
+    async deletePet(petId) {
+      if (!isOwner) throw new Error('관리자만 반려견 프로필을 삭제할 수 있습니다.')
+      if (!state.pets.some((pet) => pet.id === petId)) throw new Error('접근할 수 없는 반려견입니다.')
+      const { error } = await supabase.from('pets').delete().eq('id', petId)
+      if (error) throw error
+      await load()
+    },
     async updateAccountProfile(displayName) {
       const normalizedName = String(displayName || '').trim()
       if (!normalizedName) throw new Error('표시 이름을 입력해 주세요.')

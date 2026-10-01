@@ -112,6 +112,11 @@ $$;
 alter table public.health_routines enable row level security;
 alter table public.health_routine_completions enable row level security;
 
+drop policy if exists "health_routines_select_member" on public.health_routines;
+drop policy if exists "health_routines_insert_member" on public.health_routines;
+drop policy if exists "health_routines_update_member" on public.health_routines;
+drop policy if exists "health_routine_completions_select_member" on public.health_routine_completions;
+
 create policy "health_routines_select_member" on public.health_routines for select to authenticated
   using (public.is_active_household_member(public.pet_household(pet_id)));
 create policy "health_routines_insert_member" on public.health_routines for insert to authenticated

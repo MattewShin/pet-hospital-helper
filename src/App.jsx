@@ -120,6 +120,20 @@ function getLocalDateKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
+function getTimeGreeting(date = new Date()) {
+  const hour = date.getHours()
+  if (hour < 5) return '편안한 밤이에요'
+  if (hour < 12) return '좋은 아침이에요'
+  if (hour < 18) return '좋은 오후예요'
+  return '좋은 저녁이에요'
+}
+
+function authErrorMessage(error, mode) {
+  const message = error?.message || ''
+  if (mode === 'login' && (error?.code === 'invalid_credentials' || /invalid login credentials/i.test(message))) return '비밀번호를 확인해주세요'
+  return message || '로그인 요청을 처리하지 못했어요.'
+}
+
 function getEventTimeMinutes(event) {
   if (Number.isFinite(event.routineTimeMinutes)) return event.routineTimeMinutes
   if (Number.isFinite(event.timeMinutes)) return event.timeMinutes
@@ -509,7 +523,7 @@ function AuthScreen({ notice = '' }) {
         if (authError) throw authError
       }
     } catch (authError) {
-      setError(authError.message || '로그인 요청을 처리하지 못했어요.')
+      setError(authErrorMessage(authError, mode))
     } finally {
       setBusy('')
     }
@@ -665,6 +679,10 @@ function DokeApp({ session }) {
   const allHospitalRecords = data.hospitalRecords.filter((record) => record.petId === profile.id)
   const mealRoutines = workspace.mealRoutines.filter((routine) => routine.petId === profile.id).sort((a, b) => a.timeMinutes - b.timeMinutes)
   const todayMealRecords = events.filter((event) => event.source === 'meal_record' && event.localDate === getLocalDateKey())
+  const healthRoutines = workspace.healthRoutines.filter((routine) => routine.petId === profile.id).sort((a, b) => a.nextDueDate.localeCompare(b.nextDueDate))
+  const activeHealthRoutines = healthRoutines.filter((routine) => routine.active)
+  const healthRoutineCompletions = workspace.healthRoutineCompletions.filter((completion) => completion.petId === profile.id)
+  const healthAlerts = activeHealthRoutines.filter(isHealthRoutineAlert)
   const bannerPreference = workspace.petViewPreferences.find((preference) => preference.petId === profile.id) || defaultBannerPreference
   const totalSpent = allHospitalRecords.reduce((sum, record) => sum + (record.amount || 0), 0)
 
@@ -774,6 +792,18 @@ function DokeApp({ session }) {
     }
   }
 
+  const deletePet = async (pet) => {
+    try {
+      await workspace.actions.deletePet(pet.id)
+      setSheet(null)
+      setActiveTab('home')
+      notify(`${pet.name} 프로필과 연결된 건강 기록을 삭제했어요`)
+    } catch (error) {
+      notify(error.message || '반려견 프로필을 삭제하지 못했어요')
+      throw error
+    }
+  }
+
   const saveMealRoutines = async (routines) => {
     await workspace.actions.replaceMealRoutines(profile.id, routines)
     notify(`${profile.name}의 식사 루틴을 저장했어요`)
@@ -796,6 +826,40 @@ function DokeApp({ session }) {
   const openAccount = () => {
     setSheet(null)
     setActiveTab('account')
+  }
+
+  const saveHealthRoutine = async (routine) => {
+    try {
+      if (routine.id) await workspace.actions.updateHealthRoutine({ ...routine, petId: profile.id })
+      else await workspace.actions.createHealthRoutine({ ...routine, petId: profile.id })
+      setSheet(null)
+      notify(routine.id ? '건강 루틴을 수정했어요' : '건강 루틴을 등록했어요')
+    } catch (error) {
+      notify(error.message || '건강 루틴을 저장하지 못했어요')
+      throw error
+    }
+  }
+
+  const completeHealthRoutine = async (routine, completionDate, nextDueDate) => {
+    try {
+      await workspace.actions.completeHealthRoutine(routine.id, completionDate, nextDueDate)
+      setSheet(null)
+      notify(`${routine.title} 완료 이력을 저장했어요`)
+    } catch (error) {
+      notify(error.message || '완료 이력을 저장하지 못했어요')
+      throw error
+    }
+  }
+
+  const postponeHealthRoutine = async (routine, nextDueDate) => {
+    try {
+      await workspace.actions.postponeHealthRoutine(routine.id, nextDueDate)
+      setSheet(null)
+      notify(`${routine.title}의 다음 예정일을 변경했어요`)
+    } catch (error) {
+      notify(error.message || '예정일을 변경하지 못했어요')
+      throw error
+    }
   }
 
   const addPet = async (newPet) => {
@@ -908,6 +972,12 @@ function DokeApp({ session }) {
             onOpenTodayRecords={() => setActiveTab('timeline')}
             onScanDocument={() => setSheet({ type: 'receipt' })}
             memberCount={workspace.members.length}
+            healthRoutines={activeHealthRoutines}
+            onOpenHealthNotifications={() => setSheet({ type: 'health-notifications' })}
+            onManageHealthRoutines={() => setActiveTab('health-routines')}
+            onCompleteHealthRoutine={(routine) => setSheet({ type: 'health-complete', routine })}
+            onPostponeHealthRoutine={(routine) => setSheet({ type: 'health-postpone', routine })}
+            onEditHealthRoutine={(routine) => setSheet({ type: 'health-routine-form', routine })}
             legacyAvailable={workspace.legacyAvailable && workspace.isOwner}
             onMigrate={migrateLegacy}
           />
@@ -922,7 +992,10 @@ function DokeApp({ session }) {
           <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} onEdit={(record) => setSheet({ type: 'hospital-edit', record })} canEdit={(record) => workspace.isOwner || record.createdBy === session.user.id} />
         )}
         {activeTab === 'profile' && (
-          <ProfileScreen profile={profile} onSave={saveProfile} onPhotoChange={registerPetPhoto} canEdit={workspace.isOwner} mealRoutines={mealRoutines} onManageMealRoutines={() => setSheet({ type: 'meal-routine', returnTo: 'profile' })} />
+          <ProfileScreen profile={profile} onSave={saveProfile} onDelete={() => setSheet({ type: 'pet-delete', pet: profile })} onPhotoChange={registerPetPhoto} canEdit={workspace.isOwner} mealRoutines={mealRoutines} onManageMealRoutines={() => setSheet({ type: 'meal-routine', returnTo: 'profile' })} healthRoutines={activeHealthRoutines} onManageHealthRoutines={() => setActiveTab('health-routines')} />
+        )}
+        {activeTab === 'health-routines' && (
+          <HealthRoutineScreen petName={profile.name} routines={activeHealthRoutines} completions={healthRoutineCompletions} onBack={() => setActiveTab('profile')} onAdd={() => setSheet({ type: 'health-routine-form' })} onComplete={(routine) => setSheet({ type: 'health-complete', routine })} onPostpone={(routine) => setSheet({ type: 'health-postpone', routine })} onEdit={(routine) => setSheet({ type: 'health-routine-form', routine })} />
         )}
         {activeTab === 'family' && (
           <FamilyShareScreen
@@ -956,6 +1029,8 @@ function DokeApp({ session }) {
         <PetSwitcherSheet pets={data.pets} selectedPetId={data.selectedPetId} onClose={() => setSheet(null)} onSelect={selectPet} onAdd={() => setSheet({ type: 'pet-add' })} canManage={workspace.isOwner} onAccount={openAccount} onLogout={() => supabase.auth.signOut()} />
       ) : sheet?.type === 'pet-add' ? (
         <AddPetSheet onClose={() => setSheet(null)} onSave={addPet} />
+      ) : sheet?.type === 'pet-delete' ? (
+        <DeletePetSheet pet={sheet.pet} onClose={() => setSheet(null)} onDelete={deletePet} />
       ) : sheet?.type === 'family-invite' ? (
         <InviteFamilySheet session={session} workspace={workspace} onClose={() => setSheet(null)} />
       ) : sheet?.type === 'receipt' ? (
@@ -972,6 +1047,14 @@ function DokeApp({ session }) {
         <EditTimelineSheet event={sheet.event} onClose={() => setSheet(null)} onSave={updateEvent} />
       ) : sheet?.type === 'meal-routine' ? (
         <MealRoutineSheet petName={profile.name} routines={mealRoutines} focusRoutineId={sheet.focusRoutineId} onClose={closeMealRoutine} onSave={saveMealRoutines} />
+      ) : sheet?.type === 'health-notifications' ? (
+        <HealthNotificationsSheet petName={profile.name} routines={healthAlerts} onClose={() => setSheet(null)} onManage={() => { setSheet(null); setActiveTab('health-routines') }} onComplete={(routine) => setSheet({ type: 'health-complete', routine })} onPostpone={(routine) => setSheet({ type: 'health-postpone', routine })} onEdit={(routine) => setSheet({ type: 'health-routine-form', routine })} />
+      ) : sheet?.type === 'health-routine-form' ? (
+        <HealthRoutineFormSheet petName={profile.name} routine={sheet.routine || null} onClose={() => setSheet(null)} onSave={saveHealthRoutine} />
+      ) : sheet?.type === 'health-complete' ? (
+        <HealthRoutineCompleteSheet routine={sheet.routine} onClose={() => setSheet(null)} onSave={completeHealthRoutine} />
+      ) : sheet?.type === 'health-postpone' ? (
+        <HealthRoutinePostponeSheet routine={sheet.routine} onClose={() => setSheet(null)} onSave={postponeHealthRoutine} />
       ) : sheet ? (
         <LogSheet type={sheet.type} onClose={() => setSheet(null)} onSave={addEvent} mealRoutines={mealRoutines} todayMealRecords={todayMealRecords} initialMeal={sheet.initialMeal || null} onConfirmRoutine={(routine) => confirmRoutineMeal(routine, 'confirmed')} onSkipRoutine={(routine) => confirmRoutineMeal(routine, 'skipped')} onModifyRoutine={workspace.isOwner ? (routine) => setSheet({ type: 'meal-routine', returnTo: 'meal', focusRoutineId: routine.id }) : null} onManageMealRoutines={workspace.isOwner ? () => setSheet({ type: 'meal-routine', returnTo: 'meal' }) : null} />
       ) : null}
@@ -1093,6 +1176,42 @@ function AddPetSheet({ onClose, onSave }) {
   )
 }
 
+function DeletePetSheet({ pet, onClose, onDelete }) {
+  useEscapeClose(onClose)
+  const [confirmation, setConfirmation] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const confirmed = confirmation.trim() === pet.name
+
+  const submit = async (event) => {
+    event.preventDefault()
+    if (!confirmed) {
+      setError(`삭제하려면 ${pet.name} 이름을 정확히 입력해 주세요.`)
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await onDelete(pet)
+    } catch {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet delete-pet-sheet" onSubmit={submit}>
+        <div className="sheet-handle" />
+        <div className="sheet-header"><div className="sheet-title-icon coral"><Trash2 size={20} /></div><div><p>되돌릴 수 없는 작업</p><h2>{pet.name} 프로필 삭제</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="반려견 삭제 닫기"><X size={21} /></button></div>
+        <div className="delete-pet-warning"><strong>프로필과 연결된 건강 기록도 함께 삭제됩니다.</strong><p>타임라인, 병원 기록, 식사 기록, 건강 루틴과 완료 이력은 복구할 수 없어요.</p></div>
+        <label><span>확인을 위해 <b>{pet.name}</b>을 입력해 주세요.</span><input autoFocus value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={pet.name} /></label>
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        <div className="delete-pet-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>취소</button><button type="submit" className="delete-pet-button" disabled={!confirmed || busy}>{busy ? '삭제 중…' : '프로필 삭제'}</button></div>
+      </form>
+    </div>
+  )
+}
+
 function NavButton({ item, active, onClick }) {
   const Icon = item.icon
   return (
@@ -1103,14 +1222,14 @@ function NavButton({ item, active, onClick }) {
   )
 }
 
-function Header({ eyebrow, title, action = true, onBack }) {
+function Header({ eyebrow, title, action = true, onBack, onAction, hasNotification = false }) {
   return (
     <header className="screen-header">
       <div>
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>
       </div>
-      {onBack ? <button className="icon-button" aria-label="이전 화면" onClick={onBack}><ArrowLeft size={21} /></button> : action && <button className="icon-button" aria-label="알림"><Bell size={21} /><span className="notification-dot" /></button>}
+      {onBack ? <button className="icon-button" aria-label="이전 화면" onClick={onBack}><ArrowLeft size={21} /></button> : action && onAction && <button className="icon-button" aria-label="건강 관리 알림" onClick={onAction}><Bell size={21} />{hasNotification && <span className="notification-dot" />}</button>}
     </header>
   )
 }
@@ -1371,7 +1490,7 @@ function BannerSettingsSheet({ petName, section, preference, onBack, onClose, on
   )
 }
 
-function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, memberCount, legacyAvailable, onMigrate }) {
+function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, memberCount, healthRoutines = [], onOpenHealthNotifications, onManageHealthRoutines, onCompleteHealthRoutine, onPostponeHealthRoutine, onEditHealthRoutine, legacyAvailable, onMigrate }) {
   const latestMeal = events.find((event) => event.type === 'meal' && event.mealStatus !== 'skipped')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
   const lastRecord = events[0]
@@ -1383,6 +1502,8 @@ function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, 
   const todayLabel = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   const now = Date.now()
   const futureHospitals = hospitalRecords.filter((record) => new Date(record.visitedAt || '').getTime() > now).sort((a, b) => new Date(a.visitedAt) - new Date(b.visitedAt))
+  const nextVaccinationRoutine = healthRoutines.find((routine) => routine.category === 'vaccination')
+  const nextMedicationRoutine = healthRoutines.find((routine) => ['heartworm', 'parasite'].includes(routine.category) || routine.medicationName)
   const nextVaccination = futureHospitals.find((record) => /예방접종|백신/.test(`${record.reason || ''} ${record.diagnosis || ''}`))
   const nextAppointment = futureHospitals[0]
   const nextMedication = events.filter((event) => event.type === 'medicine' && new Date(event.occurredAt || '').getTime() > now).sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt))[0]
@@ -1392,15 +1513,15 @@ function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, 
     weight: { value: profile.weight ? `${profile.weight}kg` : '미입력', label: '현재 체중' },
     meal: { value: mealMatch ? mealMatch[0].replace(/\s/g, '') : latestMeal ? '기록됨' : '미기록', label: '최근 식사량' },
     activity: { value: activityMeasure || (latestActivity ? '기록됨' : '미기록'), label: '오늘 활동량' },
-    vaccination: { value: formatSchedule(nextVaccination?.visitedAt), label: '다음 예방접종' },
-    medication: { value: formatSchedule(nextMedication?.occurredAt), label: '복약 일정' },
+    vaccination: { value: nextVaccinationRoutine ? formatHealthDate(nextVaccinationRoutine.nextDueDate) : formatSchedule(nextVaccination?.visitedAt), label: '다음 예방접종' },
+    medication: { value: nextMedicationRoutine ? formatHealthDate(nextMedicationRoutine.nextDueDate) : formatSchedule(nextMedication?.occurredAt), label: '복약 일정' },
     appointment: { value: formatSchedule(nextAppointment?.visitedAt), label: '다음 진료 일정' },
   }
   const selectedMetrics = (bannerPreference.metricIds || defaultBannerPreference.metricIds).map((id) => metricValues[id]).filter(Boolean).slice(0, 3)
 
   return (
     <div className="screen home-screen">
-      <Header eyebrow={todayLabel} title={<>좋은 아침이에요, <span>{profile.name} 보호자님</span></>} />
+      <Header eyebrow={todayLabel} title={<>{getTimeGreeting()}, <span>{profile.name} 보호자님</span></>} onAction={onOpenHealthNotifications} hasNotification={healthRoutines.some(isHealthRoutineAlert)} />
 
       {legacyAvailable && (
         <section className="migration-banner">
@@ -1430,6 +1551,20 @@ function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, 
             <span>{latestMedicine ? `최근 투약 · ${latestMedicine.detail}` : latestHospital ? `최근 병원 방문 목적 · ${latestHospital.reason || latestHospital.diagnosis}` : '다음 행동 · 오늘의 식사, 활동, 배변 또는 컨디션을 기록해 보세요.'}</span>
           </div>
         </div>
+      </section>
+
+      <section className="health-routine-home-card">
+        <div className="health-routine-heading">
+          <div><span><ShieldCheck size={18} /></span><div><p>예방 관리 알림</p><h2>다가오는 건강 관리</h2></div></div>
+          <button type="button" onClick={onManageHealthRoutines}>전체 관리 <ChevronRight size={15} /></button>
+        </div>
+        {healthRoutines.length ? (
+          <div className="health-routine-list compact">
+            {healthRoutines.slice(0, 3).map((routine) => <HealthRoutineItem key={routine.id} routine={routine} onComplete={onCompleteHealthRoutine} onPostpone={onPostponeHealthRoutine} onEdit={onEditHealthRoutine} />)}
+          </div>
+        ) : (
+          <button type="button" className="health-routine-empty-action" onClick={onManageHealthRoutines}><ShieldCheck size={20} /><span><strong>등록된 건강 루틴이 없어요</strong><small>예방약·접종·검진 일정을 직접 등록해 보세요.</small></span><ChevronRight size={17} /></button>
+        )}
       </section>
 
       <section className="shared-care-card">
@@ -1612,7 +1747,183 @@ function BriefingSection({ title, children }) {
   return <section className="document-section"><h3>{title}</h3>{children}</section>
 }
 
-function ProfileScreen({ profile, onSave, onPhotoChange, canEdit, mealRoutines = [], onManageMealRoutines }) {
+function HealthRoutineItem({ routine, onComplete, onPostpone, onEdit }) {
+  const due = healthDueState(routine)
+  return (
+    <article className="health-routine-item">
+      <div className="health-routine-item-main">
+        <span className="health-routine-icon"><ShieldCheck size={18} /></span>
+        <div>
+          <div className="health-routine-title-row"><strong>{routine.title}</strong><span className={`health-due-pill ${due.id}`}>{due.label}</span></div>
+          <p>{healthCategoryLabel(routine.category)} · {formatHealthDate(routine.nextDueDate)} · {healthRecurrenceLabel(routine)}</p>
+          {(routine.medicationName || routine.dosage) && <small>{[routine.medicationName, routine.dosage].filter(Boolean).join(' · ')}</small>}
+        </div>
+      </div>
+      <div className="health-routine-actions">
+        <button type="button" className="complete" onClick={() => onComplete(routine)}><Check size={14} /> 완료</button>
+        <button type="button" onClick={() => onPostpone(routine)}>다음에</button>
+        <button type="button" onClick={() => onEdit(routine)}>일정 수정</button>
+      </div>
+    </article>
+  )
+}
+
+function HealthRoutineScreen({ petName, routines, completions, onBack, onAdd, onComplete, onPostpone, onEdit }) {
+  return (
+    <div className="screen health-routine-screen">
+      <Header eyebrow={`${petName}의 놓치기 쉬운 일정`} title="건강 루틴 · 예방 관리" action={false} onBack={onBack} />
+      <div className="health-routine-screen-intro">
+        <div><ShieldCheck size={22} /><span><strong>예정과 실제 완료를 구분해요</strong><p>알림만으로 완료 처리되지 않으며, 가족이 완료를 눌렀을 때만 이력이 남아요.</p></span></div>
+        <button type="button" className="primary-button" onClick={onAdd}><Plus size={16} /> 루틴 등록</button>
+      </div>
+
+      <section className="health-routine-section">
+        <div className="section-heading inline"><div><p className="eyebrow">예정</p><h2>등록된 건강 루틴</h2></div><span className="health-count">{routines.length}개</span></div>
+        {routines.length ? <div className="health-routine-list">{routines.map((routine) => <HealthRoutineItem key={routine.id} routine={routine} onComplete={onComplete} onPostpone={onPostpone} onEdit={onEdit} />)}</div> : <div className="health-routine-screen-empty"><ShieldCheck size={24} /><strong>예정된 건강 관리가 없어요</strong><p>병원이나 제품 안내에 따라 필요한 일정을 직접 등록해 주세요.</p><button type="button" onClick={onAdd}>첫 건강 루틴 등록</button></div>}
+      </section>
+
+      <section className="health-routine-section completion-history">
+        <div className="section-heading"><div><p className="eyebrow">실제 이력</p><h2>완료한 예방 관리</h2></div></div>
+        {completions.length ? <div className="health-completion-list">{completions.map((completion) => <article key={completion.id}><span><Check size={15} /></span><div><strong>{completion.title}</strong><p>{healthCategoryLabel(completion.category)} · {formatHealthDate(completion.completedLocalDate)} 완료</p><small>{honorificName(completion.completedByName)}이 완료{completion.nextDueDate ? ` · 다음 예정 ${formatHealthDate(completion.nextDueDate)}` : ''}</small></div></article>)}</div> : <div className="health-history-empty">아직 완료한 건강 관리 이력이 없어요.</div>}
+      </section>
+    </div>
+  )
+}
+
+function HealthNotificationsSheet({ petName, routines, onClose, onManage, onComplete, onPostpone, onEdit }) {
+  useEscapeClose(onClose)
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="bottom-sheet health-notification-sheet" role="dialog" aria-modal="true" aria-labelledby="health-notification-title">
+        <div className="sheet-handle" />
+        <div className="sheet-header"><div className="sheet-title-icon green"><Bell size={20} /></div><div><p>{petName}의 앱 내 알림</p><h2 id="health-notification-title">다가오는 건강 관리</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="알림 닫기"><X size={21} /></button></div>
+        {routines.length ? <div className="health-routine-list">{routines.map((routine) => <HealthRoutineItem key={routine.id} routine={routine} onComplete={onComplete} onPostpone={onPostpone} onEdit={onEdit} />)}</div> : <div className="health-notification-empty"><Check size={22} /><strong>확인할 건강 관리 알림이 없어요</strong><p>등록한 사전 알림 시점이 되면 이곳에 표시됩니다.</p></div>}
+        <button type="button" className="secondary-button full" onClick={onManage}><SlidersHorizontal size={16} /> 전체 건강 루틴 관리</button>
+      </section>
+    </div>
+  )
+}
+
+function HealthRoutineFormSheet({ petName, routine, onClose, onSave }) {
+  useEscapeClose(onClose)
+  const [form, setForm] = useState(() => ({
+    id: routine?.id || '',
+    title: routine?.title || '',
+    category: routine?.category || 'heartworm',
+    nextDueDate: routine?.nextDueDate || dateKeyFromDate(),
+    recurrenceUnit: routine?.recurrenceUnit || 'once',
+    recurrenceInterval: String(routine?.recurrenceInterval || 1),
+    reminderDays: routine?.reminderDays || [0],
+    medicationName: routine?.medicationName || '',
+    dosage: routine?.dosage || '',
+    notes: routine?.notes || '',
+    active: routine?.active !== false,
+  }))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const toggleReminder = (days) => setForm((current) => {
+    const selected = current.reminderDays.includes(days)
+    if (selected && current.reminderDays.length === 1) return current
+    return { ...current, reminderDays: selected ? current.reminderDays.filter((item) => item !== days) : [...current.reminderDays, days].sort((a, b) => a - b) }
+  })
+  const submit = async (event) => {
+    event.preventDefault()
+    const interval = Number(form.recurrenceInterval)
+    if (!form.title.trim()) return setError('건강 루틴 제목을 입력해 주세요.')
+    if (!form.nextDueDate) return setError('다음 예정일을 선택해 주세요.')
+    if (!Number.isInteger(interval) || interval < 1 || interval > 365) return setError('반복 간격은 1부터 365 사이로 입력해 주세요.')
+    setBusy(true)
+    setError('')
+    try {
+      await onSave({ ...form, title: form.title.trim(), recurrenceInterval: interval, medicationName: form.medicationName.trim(), dosage: form.dosage.trim(), notes: form.notes.trim() })
+    } catch {
+      setBusy(false)
+    }
+  }
+  const unitLabel = { day: '일', week: '주', month: '개월', year: '년' }[form.recurrenceUnit]
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet health-routine-form-sheet" onSubmit={submit}>
+        <div className="sheet-handle" />
+        <div className="sheet-header"><div className="sheet-title-icon green"><ShieldCheck size={20} /></div><div><p>{petName}의 예방 관리</p><h2>{routine ? '건강 루틴 수정' : '건강 루틴 등록'}</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="건강 루틴 입력 닫기"><X size={21} /></button></div>
+        <label><span>제목 <em>필수</em></span><input required maxLength="80" value={form.title} onChange={(event) => update('title', event.target.value)} placeholder="예: 사상충 예방약" /></label>
+        <div className="form-columns">
+          <label>분류<select value={form.category} onChange={(event) => update('category', event.target.value)}>{healthRoutineCategories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}</select></label>
+          <label><span>다음 예정일 <em>필수</em></span><input required type="date" value={form.nextDueDate} onChange={(event) => update('nextDueDate', event.target.value)} /></label>
+        </div>
+        <div className="health-repeat-field"><span>반복 주기</span><div className="health-repeat-row"><select value={form.recurrenceUnit} onChange={(event) => update('recurrenceUnit', event.target.value)}><option value="once">한 번만</option><option value="week">매주 / N주마다</option><option value="month">매월 / N개월마다</option><option value="year">매년 / N년마다</option><option value="day">N일마다</option></select>{form.recurrenceUnit !== 'once' && <div className="unit-input"><input aria-label="반복 간격" type="number" min="1" max="365" inputMode="numeric" value={form.recurrenceInterval} onChange={(event) => update('recurrenceInterval', event.target.value)} /><span>{unitLabel}마다</span></div>}</div></div>
+        <div className="health-reminder-field"><span>사전 알림 <small>복수 선택 가능</small></span><div>{reminderOptions.map((option) => <button type="button" key={option.days} className={form.reminderDays.includes(option.days) ? 'selected' : ''} aria-pressed={form.reminderDays.includes(option.days)} onClick={() => toggleReminder(option.days)}>{form.reminderDays.includes(option.days) && <Check size={13} />}{option.label}</button>)}</div></div>
+        <div className="form-columns"><label>약·제품 이름<input value={form.medicationName} onChange={(event) => update('medicationName', event.target.value)} placeholder="선택 입력" /></label><label>용량<input value={form.dosage} onChange={(event) => update('dosage', event.target.value)} placeholder="병원·제품 안내 기준" /></label></div>
+        <label>병원·제품 안내 메모<textarea value={form.notes} onChange={(event) => update('notes', event.target.value)} placeholder="예: 병원에서 다음 달 같은 주에 투약 안내" /></label>
+        <div className="form-safety-note"><ShieldCheck size={16} /><p>병원 및 제품 안내에 따라 일정을 설정해 주세요. 예정 상태만으로 실제 완료 이력이 저장되지는 않아요.</p></div>
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        <button className="primary-button full" type="submit" disabled={busy}>{busy ? '저장 중…' : routine ? '수정 내용 저장' : '건강 루틴 등록'}</button>
+      </form>
+    </div>
+  )
+}
+
+function HealthRoutineCompleteSheet({ routine, onClose, onSave }) {
+  useEscapeClose(onClose)
+  const today = dateKeyFromDate()
+  const [completionDate, setCompletionDate] = useState(today)
+  const [nextDueDate, setNextDueDate] = useState(() => addHealthInterval(today, routine.recurrenceUnit, routine.recurrenceInterval))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const changeCompletionDate = (value) => {
+    setCompletionDate(value)
+    if (routine.recurrenceUnit !== 'once') setNextDueDate(addHealthInterval(value, routine.recurrenceUnit, routine.recurrenceInterval))
+  }
+  const submit = async (event) => {
+    event.preventDefault()
+    if (!completionDate || (routine.recurrenceUnit !== 'once' && !nextDueDate)) return setError('완료일과 다음 예정일을 확인해 주세요.')
+    setBusy(true)
+    setError('')
+    try { await onSave(routine, completionDate, nextDueDate) } catch { setBusy(false) }
+  }
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet health-action-sheet" onSubmit={submit}>
+        <div className="sheet-handle" /><div className="sheet-header"><div className="sheet-title-icon green"><Check size={20} /></div><div><p>실제로 관리한 결과만 기록</p><h2>{routine.title} 완료</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={21} /></button></div>
+        <div className="health-action-summary"><span>{healthCategoryLabel(routine.category)}</span><strong>예정일 {formatHealthDate(routine.nextDueDate)}</strong><p>{routine.medicationName || routine.notes || '등록된 일정에 따라 완료 이력을 남겨요.'}</p></div>
+        <label>실제 완료일<input required type="date" value={completionDate} onChange={(event) => changeCompletionDate(event.target.value)} /></label>
+        {routine.recurrenceUnit === 'once' ? <p className="health-once-note">한 번만 수행하는 일정이라 완료 후 활성 목록에서 내려갑니다. 완료 이력은 유지돼요.</p> : <label>다음 예정일<input required type="date" min={completionDate} value={nextDueDate} onChange={(event) => setNextDueDate(event.target.value)} /><small>실제 완료일과 반복 주기를 기준으로 계산했어요. 필요하면 수정할 수 있어요.</small></label>}
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        <button className="primary-button full" disabled={busy}>{busy ? '완료 저장 중…' : '완료 이력 저장'}</button>
+      </form>
+    </div>
+  )
+}
+
+function HealthRoutinePostponeSheet({ routine, onClose, onSave }) {
+  useEscapeClose(onClose)
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1)
+  const initialDate = healthDueState(routine).days <= 0 ? dateKeyFromDate(tomorrow) : dateKeyFromDate(new Date(new Date(`${routine.nextDueDate}T12:00:00`).getTime() + 86400000))
+  const [nextDueDate, setNextDueDate] = useState(initialDate)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async (event) => {
+    event.preventDefault()
+    if (!nextDueDate) return setError('변경할 예정일을 선택해 주세요.')
+    setBusy(true)
+    setError('')
+    try { await onSave(routine, nextDueDate) } catch { setBusy(false) }
+  }
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet health-action-sheet" onSubmit={submit}>
+        <div className="sheet-handle" /><div className="sheet-header"><div className="sheet-title-icon amber"><CalendarDays size={20} /></div><div><p>완료하지 않고 예정일만 변경</p><h2>{routine.title} · 다음에</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={21} /></button></div>
+        <label>새 예정일<input required type="date" min={dateKeyFromDate()} value={nextDueDate} onChange={(event) => setNextDueDate(event.target.value)} /></label>
+        <p className="health-once-note">예정일만 옮기며 완료 이력은 만들지 않아요. 실제로 관리한 뒤에는 반드시 ‘완료’를 눌러 주세요.</p>
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        <button className="primary-button full" disabled={busy}>{busy ? '변경 중…' : '예정일 변경'}</button>
+      </form>
+    </div>
+  )
+}
+
+function ProfileScreen({ profile, onSave, onDelete, onPhotoChange, canEdit, mealRoutines = [], onManageMealRoutines, healthRoutines = [], onManageHealthRoutines }) {
   const [draft, setDraft] = useState(profile)
 
   useEffect(() => {
@@ -1681,10 +1992,19 @@ function ProfileScreen({ profile, onSave, onPhotoChange, canEdit, mealRoutines =
           {canEdit && <button type="button" className="secondary-button meal-routine-manage-button" onClick={onManageMealRoutines}><SlidersHorizontal size={16} /> 식사 루틴 관리</button>}
         </section>
 
+        <section className="profile-form-section health-routine-profile-card">
+          <div className="profile-section-title"><span>05</span><div><h3>건강 루틴 · 예방 관리</h3><p>예방약, 접종, 검진처럼 놓치기 쉬운 일정을 관리해요.</p></div></div>
+          {healthRoutines.length > 0 ? (
+            <div className="health-routine-summary-list">{healthRoutines.slice(0, 4).map((routine) => { const due = healthDueState(routine); return <span key={routine.id}><ShieldCheck size={14} /><b>{routine.title}</b><small>{formatHealthDate(routine.nextDueDate)} · {due.label}</small></span> })}</div>
+          ) : <p className="meal-routine-empty">등록된 건강 루틴이 없어요.</p>}
+          <button type="button" className="secondary-button meal-routine-manage-button" onClick={onManageHealthRoutines}><CalendarDays size={16} /> 건강 루틴 관리</button>
+        </section>
+
         {canEdit && <div className="profile-save-bar">
           <p>{draft.birthDate ? `${getAgeLabel(draft.birthDate)} · ` : ''}{draft.breed || '품종 미입력'} · {draft.weight ? `${draft.weight}kg` : '몸무게 미입력'}</p>
           <button className="primary-button" type="submit"><Save size={18} /> 프로필 저장</button>
         </div>}
+        {canEdit && <button type="button" className="profile-delete-button" onClick={onDelete}><Trash2 size={16} /> {profile.name} 프로필 삭제</button>}
       </form>
     </div>
   )
