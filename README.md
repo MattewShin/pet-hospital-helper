@@ -5,6 +5,7 @@
 ## 구현 범위
 
 - 이메일 회원가입·로그인과 Google·네이버·카카오 OAuth, 로그아웃
+- 반려견 전환 메뉴에서 진입하는 내 계정 표시 이름·소셜 아바타 관리
 - 가족 공간 생성과 OWNER/MEMBER 역할
 - 관리자 초대·초대 취소·구성원 내보내기, 초대받은 사용자의 수락
 - 가족 공간별 다견 프로필과 반려견별 타임라인·병원 기록·진료 브리핑 분리
@@ -16,7 +17,7 @@
 ## 1. Supabase 설정
 
 1. Supabase 프로젝트를 생성합니다.
-2. SQL Editor에서 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)을 실행합니다. 기존 프로젝트라면 이어서 [`supabase/migrations/202610010002_social_auth_profiles.sql`](supabase/migrations/202610010002_social_auth_profiles.sql)도 실행합니다.
+2. SQL Editor에서 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)을 실행합니다. 기존 프로젝트라면 [`supabase/migrations/202610010002_social_auth_profiles.sql`](supabase/migrations/202610010002_social_auth_profiles.sql), [`supabase/migrations/202610010003_user_account_profile.sql`](supabase/migrations/202610010003_user_account_profile.sql) 순서로 실행합니다.
 3. Authentication → Providers에서 Email 로그인을 켭니다.
 4. Authentication → URL Configuration에서 다음을 설정합니다.
    - Site URL: 실제 Vercel 주소(예: `https://doke.example.com`)
@@ -150,6 +151,10 @@ Production, Preview, Development에 각각 실제로 사용할 URL과 공개 플
 5. `(household_id, legacy_id)` / `(pet_id, legacy_id)` 고유 키로 재시도 시 중복 생성을 방지합니다.
 
 원본 `localStorage`는 자동 삭제하지 않으므로 이전 실패 시 다시 시도할 수 있습니다. 사진 업로드가 실패한 항목은 텍스트 기록 이전을 계속하며, 브라우저 데이터 URL이나 오래된 참조는 가능한 범위에서만 유지됩니다.
+
+## 7. 내 계정 확인
+
+상단 또는 사이드바의 반려견 선택 영역을 열고 목록 아래의 `내 계정`을 선택합니다. 표시 이름은 `profiles.display_name`에 저장되며, 이메일은 수정할 수 없습니다. 소셜 로그인 공급자가 제공한 사진은 `profiles.avatar_url`에서 표시하고 사진이 없으면 표시 이름의 이니셜을 사용합니다.
 
 ## 보안 주의사항
 

@@ -236,7 +236,7 @@ const navItems = [
   { id: 'timeline', label: '타임라인', icon: Clock3 },
   { id: 'briefing', label: '진료 브리핑', icon: ClipboardList },
   { id: 'records', label: '병원 기록', icon: ReceiptText },
-  { id: 'profile', label: '프로필', icon: UserRound },
+  { id: 'profile', label: '반려견 프로필', icon: UserRound },
   { id: 'family', label: '가족과 공유', icon: UsersRound },
 ]
 
@@ -611,6 +611,11 @@ function DokeApp({ session }) {
     }
   }
 
+  const openAccount = () => {
+    setSheet(null)
+    setActiveTab('account')
+  }
+
   const addPet = async (newPet) => {
     try {
       await workspace.actions.createPet({ ...defaultProfile, ...newPet })
@@ -734,6 +739,14 @@ function DokeApp({ session }) {
             notify={notify}
           />
         )}
+        {activeTab === 'account' && (
+          <AccountScreen
+            session={session}
+            profile={workspace.profile}
+            onBack={() => setActiveTab('home')}
+            onSave={workspace.actions.updateAccountProfile}
+          />
+        )}
       </main>
 
       <nav className="bottom-nav" aria-label="하단 메뉴">
@@ -743,7 +756,7 @@ function DokeApp({ session }) {
       </nav>
 
       {sheet?.type === 'pet-switcher' ? (
-        <PetSwitcherSheet pets={data.pets} selectedPetId={data.selectedPetId} onClose={() => setSheet(null)} onSelect={selectPet} onAdd={() => setSheet({ type: 'pet-add' })} canManage={workspace.isOwner} />
+        <PetSwitcherSheet pets={data.pets} selectedPetId={data.selectedPetId} onClose={() => setSheet(null)} onSelect={selectPet} onAdd={() => setSheet({ type: 'pet-add' })} canManage={workspace.isOwner} onAccount={openAccount} onLogout={() => supabase.auth.signOut()} />
       ) : sheet?.type === 'pet-add' ? (
         <AddPetSheet onClose={() => setSheet(null)} onSave={addPet} />
       ) : sheet?.type === 'family-invite' ? (
@@ -806,7 +819,7 @@ function PetAvatar({ photo, name = '반려견', large = false, onPhotoChange, pr
   return <div className={`pet-avatar ${large ? 'large' : ''}`}>{content}</div>
 }
 
-function PetSwitcherSheet({ pets, selectedPetId, onClose, onSelect, onAdd, canManage }) {
+function PetSwitcherSheet({ pets, selectedPetId, onClose, onSelect, onAdd, canManage, onAccount, onLogout }) {
   return (
     <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="bottom-sheet pet-switcher-sheet">
@@ -825,6 +838,10 @@ function PetSwitcherSheet({ pets, selectedPetId, onClose, onSelect, onAdd, canMa
           ))}
         </div>
         {canManage && <button className="add-pet-button" onClick={onAdd}><Plus size={18} /> 반려견 추가</button>}
+        <div className="pet-switcher-account-menu">
+          <button type="button" onClick={onAccount}><UserRound size={18} /><span><strong>내 계정</strong><small>표시 이름과 로그인 정보를 확인해요.</small></span><ChevronRight size={17} /></button>
+          <button type="button" className="logout" onClick={onLogout}><LogOut size={18} /><span><strong>로그아웃</strong><small>이 기기에서 도케 사용을 마쳐요.</small></span></button>
+        </div>
       </div>
     </div>
   )
@@ -887,15 +904,94 @@ function NavButton({ item, active, onClick }) {
   )
 }
 
-function Header({ eyebrow, title, action = true }) {
+function Header({ eyebrow, title, action = true, onBack }) {
   return (
     <header className="screen-header">
       <div>
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>
       </div>
-      {action && <button className="icon-button" aria-label="알림"><Bell size={21} /><span className="notification-dot" /></button>}
+      {onBack ? <button className="icon-button" aria-label="이전 화면" onClick={onBack}><ArrowLeft size={21} /></button> : action && <button className="icon-button" aria-label="알림"><Bell size={21} /><span className="notification-dot" /></button>}
     </header>
+  )
+}
+
+function accountDisplayName(profile, session) {
+  const metadata = session.user.user_metadata || {}
+  return profile?.display_name || metadata.display_name || metadata.full_name || metadata.name || metadata.nickname || session.user.email?.split('@')[0] || '사용자'
+}
+
+function accountAvatarUrl(profile, session) {
+  const metadata = session.user.user_metadata || {}
+  return profile?.avatar_url || metadata.avatar_url || metadata.picture || metadata.profile_image || ''
+}
+
+function accountProviderLabel(session) {
+  const provider = session.user.app_metadata?.provider || session.user.identities?.[0]?.provider || 'email'
+  const labels = { email: '이메일', google: 'Google', kakao: '카카오', naver: '네이버', 'custom:naver': '네이버' }
+  return `${labels[provider] || '소셜'} 계정으로 로그인 중`
+}
+
+function AccountAvatar({ photo, name }) {
+  const initials = String(name || '사용자').trim().slice(0, 2).toUpperCase()
+  return (
+    <div className="account-avatar" aria-label={`${name} 프로필 이미지`}>
+      <span>{initials}</span>
+      {photo && <img src={photo} alt="" referrerPolicy="no-referrer" onError={(event) => event.currentTarget.remove()} />}
+    </div>
+  )
+}
+
+function AccountScreen({ session, profile, onBack, onSave }) {
+  const resolvedName = accountDisplayName(profile, session)
+  const [displayName, setDisplayName] = useState(resolvedName)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setDisplayName(resolvedName)
+  }, [resolvedName])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setBusy(true)
+    setMessage('')
+    setError('')
+    try {
+      await onSave(displayName)
+      setMessage('내 계정 정보를 저장했어요.')
+    } catch (saveError) {
+      setError(saveError.message || '계정 정보를 저장하지 못했어요.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="screen account-screen">
+      <Header eyebrow="가족에게 표시되는 사용자 정보" title="내 계정" action={false} onBack={onBack} />
+      <p className="account-intro">가족과 함께 기록할 내 정보를 관리해요.</p>
+
+      <section className="account-hero">
+        <AccountAvatar photo={accountAvatarUrl(profile, session)} name={displayName || resolvedName} />
+        <div><span>도케 사용자</span><h2>{displayName || '표시 이름을 입력해 주세요'}</h2><p>{session.user.email}</p></div>
+      </section>
+
+      <section className="account-card">
+        <form onSubmit={submit}>
+          <label>표시 이름<input required maxLength="50" autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="가족에게 표시할 이름" /></label>
+          <label>이메일 주소<input disabled type="email" value={session.user.email || ''} /></label>
+          <div className="account-login-method"><span>로그인 방식</span><strong>{accountProviderLabel(session)}</strong></div>
+          {error && <p className="form-message error" role="alert">{error}</p>}
+          {message && <p className="form-message success" role="status">{message}</p>}
+          <div className="account-actions">
+            <button type="button" className="logout-button" disabled={busy} onClick={() => supabase.auth.signOut()}><LogOut size={17} /> 로그아웃</button>
+            <button type="submit" className="primary-button" disabled={busy || !displayName.trim()}><Save size={17} /> {busy ? '저장 중…' : '변경사항 저장'}</button>
+          </div>
+        </form>
+      </section>
+    </div>
   )
 }
 

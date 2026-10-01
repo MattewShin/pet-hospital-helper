@@ -374,6 +374,33 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .pet-option-list i { display: flex; align-items: center; gap: 3px; color: var(--green); font-size: 9px; font-style: normal; font-weight: 700; white-space: nowrap; }
 .pet-option-list > button > svg { flex: 0 0 auto; color: var(--muted); }
 .add-pet-button { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 12px; padding: 12px; border: 1px dashed #b9c6ba; border-radius: 14px; background: transparent; color: var(--green); font-size: 11px; font-weight: 700; cursor: pointer; }
+.pet-switcher-account-menu { display: grid; gap: 4px; margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line); }
+.pet-switcher-account-menu button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; width: 100%; padding: 11px 10px; border: 0; border-radius: 13px; background: transparent; color: var(--green-dark); text-align: left; cursor: pointer; }
+.pet-switcher-account-menu button:hover { background: var(--green-soft); }
+.pet-switcher-account-menu button > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.pet-switcher-account-menu strong { font-size: 12px; }
+.pet-switcher-account-menu small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.pet-switcher-account-menu button > svg:last-child { color: var(--muted); }
+.pet-switcher-account-menu button.logout { color: #9b594b; }
+.account-hero { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; padding: 21px; border-radius: 22px; background: var(--green-dark); color: white; }
+.account-intro { margin: -17px 0 19px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.account-avatar { position: relative; display: grid; width: 74px; height: 74px; flex: 0 0 auto; place-items: center; overflow: hidden; border: 3px solid rgba(255,255,255,.82); border-radius: 50%; background: #d8b991; color: #5f4936; font-size: 20px; font-weight: 800; }
+.account-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.account-hero > div:last-child { min-width: 0; }
+.account-hero > div:last-child > span { color: rgba(255,255,255,.64); font-size: 10px; font-weight: 700; }
+.account-hero h2 { overflow: hidden; margin: 4px 0; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.account-hero p { overflow: hidden; margin: 0; color: rgba(255,255,255,.72); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.account-card { padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); }
+.account-card form { display: flex; flex-direction: column; }
+.account-card label { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; color: #5d5e57; font-size: 11px; font-weight: 700; }
+.account-card input { width: 100%; height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: #faf9f6; color: var(--ink); }
+.account-card input:disabled { background: #f1f0ec; color: var(--muted); cursor: not-allowed; }
+.account-login-method { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; padding: 13px; border-radius: 13px; background: var(--green-soft); }
+.account-login-method span { color: var(--muted); font-size: 10px; }
+.account-login-method strong { font-size: 11px; text-align: right; }
+.account-actions { display: grid; grid-template-columns: 1fr 1.35fr; gap: 9px; }
+.account-actions .logout-button { min-height: 48px; margin: 0; color: #9b594b; font-size: 11px; }
+.account-actions .primary-button { width: 100%; }
 .add-pet-photo-row { display: flex; align-items: center; gap: 15px; margin-bottom: 18px; padding: 15px; border-radius: 16px; background: #f3f2ed; }
 .add-pet-photo-row .pet-avatar { display: grid; flex-direction: initial; gap: 0; margin-bottom: 0; color: #5f4936; }
 .add-pet-photo-row > div { min-width: 0; }
@@ -470,6 +497,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .shared-care-details div + div { padding-top: 10px; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .family-summary { grid-template-columns: auto minmax(0, 1fr); }
   .family-summary > strong { grid-column: 1 / -1; width: fit-content; }
+  .account-actions { grid-template-columns: 1fr; }
+  .account-actions .primary-button { grid-row: 1; }
 }
 
 @media (max-width: 370px) {

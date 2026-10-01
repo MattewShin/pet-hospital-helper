@@ -266,6 +266,16 @@ export function useDokeData(session) {
       if (error) throw error
       await load()
     },
+    async updateAccountProfile(displayName) {
+      const normalizedName = String(displayName || '').trim()
+      if (!normalizedName) throw new Error('표시 이름을 입력해 주세요.')
+      const { error } = await supabase
+        .from('profiles')
+        .update({ display_name: normalizedName })
+        .eq('id', user.id)
+      if (error) throw error
+      await load()
+    },
     async createTimeline(record) {
       const photoPath = await uploadDataUrl(householdId, user.id, record.photo, 'timeline')
       const { error } = await supabase.from('timeline_records').insert({ pet_id: record.petId, created_by: user.id, record_type: record.type, occurred_at: record.occurredAt, details: record.details, photo_url: photoPath })

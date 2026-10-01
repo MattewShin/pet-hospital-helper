@@ -14,6 +14,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text,
   email text not null,
+  avatar_url text,
   created_at timestamptz not null default now()
 );
 create unique index if not exists profiles_unique_normalized_email on public.profiles (lower(email));
@@ -108,6 +109,7 @@ create table if not exists public.data_migrations (
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare profile_name text;
+declare profile_avatar text;
 begin
   if new.email is null or btrim(new.email) = '' then raise exception 'A verified email is required'; end if;
   profile_name := coalesce(
@@ -117,23 +119,31 @@ begin
     nullif(btrim(new.raw_user_meta_data->>'nickname'), ''),
     split_part(new.email, '@', 1)
   );
-  insert into public.profiles (id, display_name, email)
-  values (new.id, profile_name, lower(new.email))
+  profile_avatar := coalesce(
+    nullif(btrim(new.raw_user_meta_data->>'avatar_url'), ''),
+    nullif(btrim(new.raw_user_meta_data->>'picture'), ''),
+    nullif(btrim(new.raw_user_meta_data->>'profile_image'), '')
+  );
+  insert into public.profiles (id, display_name, email, avatar_url)
+  values (new.id, profile_name, lower(new.email), profile_avatar)
   on conflict (id) do update set
     email = excluded.email,
-    display_name = coalesce(nullif(public.profiles.display_name, ''), excluded.display_name);
+    display_name = coalesce(nullif(public.profiles.display_name, ''), excluded.display_name),
+    avatar_url = coalesce(nullif(public.profiles.avatar_url, ''), excluded.avatar_url);
   return new;
 end;
 $$;
 drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created after insert or update of email on auth.users
+create trigger on_auth_user_created after insert or update of email, raw_user_meta_data on auth.users
 for each row execute function public.handle_new_user();
 
-insert into public.profiles (id, display_name, email, created_at)
-select id, coalesce(raw_user_meta_data->>'display_name', split_part(email, '@', 1)), lower(email), created_at
+insert into public.profiles (id, display_name, email, avatar_url, created_at)
+select id, coalesce(raw_user_meta_data->>'display_name', raw_user_meta_data->>'full_name', raw_user_meta_data->>'name', raw_user_meta_data->>'nickname', split_part(email, '@', 1)), lower(email), coalesce(raw_user_meta_data->>'avatar_url', raw_user_meta_data->>'picture', raw_user_meta_data->>'profile_image'), created_at
 from auth.users
 where email is not null
-on conflict (id) do update set email = excluded.email;
+on conflict (id) do update set
+  email = excluded.email,
+  avatar_url = coalesce(nullif(public.profiles.avatar_url, ''), excluded.avatar_url);
 
 create or replace function public.is_active_household_member(target_household uuid)
 returns boolean language sql stable security definer set search_path = public as $$
