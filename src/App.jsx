@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { isSupabaseConfigured, supabase } from './lib/supabase.js'
+import { isSupabaseConfigured, socialAuthProviders, supabase } from './lib/supabase.js'
 import { useDokeData } from './lib/doke-data.js'
 import {
   Activity,
@@ -245,20 +245,47 @@ const honorificName = (value = '가족') => value.endsWith('님') ? value : `${v
 
 function App() {
   const [session, setSession] = useState(undefined)
+  const [authNotice, setAuthNotice] = useState('')
 
   useEffect(() => {
     if (!supabase) {
       setSession(null)
       return undefined
     }
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
+    const callbackUrl = new URL(window.location.href)
+    const callbackError = callbackUrl.searchParams.get('error_description') || callbackUrl.searchParams.get('error')
+    if (callbackError) setAuthNotice(callbackError.replace(/\+/g, ' '))
+    ;['error', 'error_code', 'error_description', 'oauth'].forEach((key) => callbackUrl.searchParams.delete(key))
+    window.history.replaceState({}, '', `${callbackUrl.pathname}${callbackUrl.search}${callbackUrl.hash}`)
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) setAuthNotice(error.message)
+      else if (data.session?.user?.email && data.session.user.email_confirmed_at) setAuthNotice('')
+      setSession(data.session)
+    })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (nextSession?.user?.email && nextSession.user.email_confirmed_at) setAuthNotice('')
+      setSession(nextSession)
+    })
     return () => listener.subscription.unsubscribe()
   }, [])
 
+  const hasRequiredEmail = !session || Boolean(session.user?.email && session.user?.email_confirmed_at)
+
+  useEffect(() => {
+    if (!supabase || !session || hasRequiredEmail) return
+    setAuthNotice('이메일 제공과 확인이 완료된 계정만 도케 가족 공유에 사용할 수 있어요. 소셜 계정의 이메일 제공 동의를 확인해 주세요.')
+    let active = true
+    supabase.auth.signOut({ scope: 'local' }).then(() => {
+      if (active) setSession(null)
+    })
+    return () => { active = false }
+  }, [session, hasRequiredEmail])
+
   if (!isSupabaseConfigured) return <ConfigurationScreen />
   if (session === undefined) return <AppLoading label="로그인 상태를 확인하고 있어요" />
-  if (!session) return <AuthScreen />
+  if (session && !hasRequiredEmail) return <AppLoading label="계정의 이메일 정보를 확인하고 있어요" />
+  if (!session) return <AuthScreen notice={authNotice} />
   return <DokeApp session={session} />
 }
 
@@ -284,16 +311,43 @@ function ErrorScreen({ message, onRetry }) {
   return <main className="access-screen"><section className="access-card centered"><HeartPulse size={28} /><h1>데이터를 불러오지 못했어요</h1><p>{message}</p><button className="primary-button full" onClick={onRetry}>다시 시도</button></section></main>
 }
 
-function AuthScreen() {
+function GoogleIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.6h3.3c1.9-1.8 2.9-4.4 2.9-7.5Z" /><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.7-2.3l-3.3-2.6c-.9.6-2.1 1-3.4 1a5.9 5.9 0 0 1-5.5-4.1H3.1v2.7A10 10 0 0 0 12 22Z" /><path fill="#FBBC05" d="M6.5 14a6 6 0 0 1 0-3.9V7.4H3.1a10 10 0 0 0 0 9.3L6.5 14Z" /><path fill="#EA4335" d="M12 6a5.4 5.4 0 0 1 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 3.1 7.4l3.4 2.7A5.9 5.9 0 0 1 12 6Z" /></svg>
+}
+
+function NaverIcon() {
+  return <span className="naver-symbol" aria-hidden="true">N</span>
+}
+
+function KakaoIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3C6.5 3 2 6.5 2 10.8c0 2.8 1.9 5.3 4.8 6.6l-1 3.6c-.1.3.2.5.5.3l4.2-2.8c.5.1 1 .1 1.5.1 5.5 0 10-3.5 10-7.8S17.5 3 12 3Z" /></svg>
+}
+
+const socialIcons = { google: GoogleIcon, naver: NaverIcon, kakao: KakaoIcon }
+
+function getAuthRedirectUrl(extraParams = {}) {
+  const redirectUrl = new URL(window.location.pathname || '/', window.location.origin)
+  const invitationId = new URLSearchParams(window.location.search).get('invitation')
+  if (invitationId) redirectUrl.searchParams.set('invitation', invitationId)
+  Object.entries(extraParams).forEach(([key, value]) => redirectUrl.searchParams.set(key, value))
+  return redirectUrl.toString()
+}
+
+function AuthScreen({ notice = '' }) {
   const [mode, setMode] = useState('login')
   const [form, setForm] = useState({ displayName: '', email: '', password: '' })
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState(notice)
+  const enabledProviders = socialAuthProviders.filter((item) => item.enabled)
+
+  useEffect(() => {
+    if (notice) setError(notice)
+  }, [notice])
 
   const submit = async (event) => {
     event.preventDefault()
-    setBusy(true)
+    setBusy('email')
     setError('')
     setMessage('')
     try {
@@ -301,7 +355,7 @@ function AuthScreen() {
         const { data, error: authError } = await supabase.auth.signUp({
           email: form.email.trim(),
           password: form.password,
-          options: { data: { display_name: form.displayName.trim() }, emailRedirectTo: window.location.origin },
+          options: { data: { display_name: form.displayName.trim() }, emailRedirectTo: getAuthRedirectUrl() },
         })
         if (authError) throw authError
         if (!data.session) setMessage('가입 확인 이메일을 보냈어요. 이메일 인증 후 로그인해 주세요.')
@@ -312,7 +366,23 @@ function AuthScreen() {
     } catch (authError) {
       setError(authError.message || '로그인 요청을 처리하지 못했어요.')
     } finally {
-      setBusy(false)
+      setBusy('')
+    }
+  }
+
+  const continueWithSocial = async (item) => {
+    setBusy(item.id)
+    setError('')
+    setMessage('')
+    try {
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider: item.provider,
+        options: { redirectTo: getAuthRedirectUrl({ oauth: item.id }) },
+      })
+      if (authError) throw authError
+    } catch (authError) {
+      setError(authError.message || `${item.label} 로그인을 시작하지 못했어요.`)
+      setBusy('')
     }
   }
 
@@ -328,8 +398,25 @@ function AuthScreen() {
           <label>비밀번호<input required minLength="6" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="6자 이상" /></label>
           {error && <p className="form-message error">{error}</p>}
           {message && <p className="form-message success">{message}</p>}
-          <button className="primary-button full" disabled={busy}>{busy ? '처리 중…' : mode === 'login' ? '로그인' : '회원가입'}</button>
+          <button className="primary-button full" disabled={Boolean(busy)}>{busy === 'email' ? '처리 중…' : mode === 'login' ? '로그인' : '회원가입'}</button>
         </form>
+        {enabledProviders.length > 0 && (
+          <section className="social-login-section" aria-label="소셜 계정 로그인">
+            <div className="auth-divider"><span>또는</span></div>
+            <div className="social-login-list">
+              {enabledProviders.map((item) => {
+                const ProviderIcon = socialIcons[item.id]
+                return (
+                  <button key={item.id} type="button" className={`social-login-button ${item.id}`} disabled={Boolean(busy)} onClick={() => continueWithSocial(item)}>
+                    <ProviderIcon />
+                    <span>{busy === item.id ? '로그인 연결 중…' : `${item.label}로 계속하기`}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        )}
+        {import.meta.env.DEV && enabledProviders.length === 0 && <p className="oauth-dev-note">소셜 로그인은 <code>VITE_AUTH_*_ENABLED=true</code>로 설정한 공급자만 표시됩니다.</p>}
         <small className="access-note">로그인 전에는 반려견과 건강 데이터를 불러오지 않습니다.</small>
       </section>
     </main>

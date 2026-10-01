@@ -53,6 +53,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .text-action { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 16px auto 0; padding: 7px; border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
 .setup-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0; color: var(--muted); font-size: 9px; }
 .setup-divider::before, .setup-divider::after { height: 1px; flex: 1; background: var(--line); content: ''; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 21px 0 15px; color: var(--muted); font-size: 10px; }
+.auth-divider::before, .auth-divider::after { height: 1px; flex: 1; background: var(--line); content: ''; }
+.social-login-list { display: grid; gap: 9px; }
+.social-login-button { position: relative; display: flex; min-height: 50px; align-items: center; justify-content: center; width: 100%; padding: 0 46px; border: 1px solid var(--line); border-radius: 13px; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease; }
+.social-login-button:hover:not(:disabled) { box-shadow: 0 6px 18px rgba(45, 55, 47, .08); transform: translateY(-1px); }
+.social-login-button:disabled { cursor: wait; opacity: .58; }
+.social-login-button > svg, .social-login-button .naver-symbol { position: absolute; left: 17px; width: 20px; height: 20px; }
+.social-login-button.google { background: #fff; color: #303134; }
+.social-login-button.naver { border-color: #03c75a; background: #03c75a; color: #fff; }
+.social-login-button.kakao { border-color: #fee500; background: #fee500; color: #191919; }
+.naver-symbol { display: grid; place-items: center; font-size: 18px; font-weight: 900; line-height: 1; }
+.oauth-dev-note { margin: 14px 0 0; padding: 9px 11px; border-radius: 10px; background: #f3f2ee; color: var(--muted); font-size: 9px; line-height: 1.55; }
 .pending-invite-list h2 { margin: 6px 0 10px; font-size: 13px; }
 .pending-invite-list article { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid #d8e1d9; border-radius: 13px; background: var(--green-soft); }
 .pending-invite-list article > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }

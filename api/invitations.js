@@ -7,7 +7,7 @@ export default async function handler(request, response) {
 
   const supabaseUrl = process.env.VITE_SUPABASE_URL
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
     return json(response, 503, { error: '서버의 Supabase 환경 변수가 설정되지 않았습니다.' })
   }
