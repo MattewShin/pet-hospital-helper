@@ -6,6 +6,7 @@
 
 - 이메일 회원가입·로그인과 Google·네이버·카카오 OAuth, 로그아웃
 - 반려견 전환 메뉴에서 진입하는 내 계정 표시 이름·소셜 아바타 관리
+- 반려견별 반복 식사 시간·급여량 루틴과 식사 기록 자동 입력
 - 가족 공간 생성과 OWNER/MEMBER 역할
 - 관리자 초대·초대 취소·구성원 내보내기, 초대받은 사용자의 수락
 - 가족 공간별 다견 프로필과 반려견별 타임라인·병원 기록·진료 브리핑 분리
@@ -17,7 +18,7 @@
 ## 1. Supabase 설정
 
 1. Supabase 프로젝트를 생성합니다.
-2. SQL Editor에서 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)을 실행합니다. 기존 프로젝트라면 [`supabase/migrations/202610010002_social_auth_profiles.sql`](supabase/migrations/202610010002_social_auth_profiles.sql), [`supabase/migrations/202610010003_user_account_profile.sql`](supabase/migrations/202610010003_user_account_profile.sql) 순서로 실행합니다.
+2. 새 Supabase 프로젝트라면 최신 내용이 합쳐진 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)만 실행합니다. 이미 `001`을 실행한 기존 프로젝트는 `001`을 다시 실행하지 말고, 아직 적용하지 않은 증분 마이그레이션을 `002 → 003 → 004 → 005 → 006` 순서로 실행합니다.
 3. Authentication → Providers에서 Email 로그인을 켭니다.
 4. Authentication → URL Configuration에서 다음을 설정합니다.
    - Site URL: 실제 Vercel 주소(예: `https://doke.example.com`)
@@ -155,6 +156,12 @@ Production, Preview, Development에 각각 실제로 사용할 URL과 공개 플
 ## 7. 내 계정 확인
 
 상단 또는 사이드바의 반려견 선택 영역을 열고 목록 아래의 `내 계정`을 선택합니다. 표시 이름은 `profiles.display_name`에 저장되며, 이메일은 수정할 수 없습니다. 소셜 로그인 공급자가 제공한 사진은 `profiles.avatar_url`에서 표시하고 사진이 없으면 표시 이름의 이니셜을 사용합니다.
+
+## 8. 식사 루틴
+
+`반려견 프로필 → 식사 루틴 관리` 또는 식사 기록 입력폼의 `식사 루틴 → 관리`에서 시간, 음식 이름, 기본 급여량과 활성 여부를 등록합니다. 루틴은 예정 정보일 뿐 실제 식사 기록을 자동 생성하지 않습니다.
+
+식사 기록 화면의 오늘 예정 카드에서 `먹였어요`를 누르면 누른 시각을 실제 확인 시각으로 저장하고, 타임라인에는 해당 루틴의 예정 시각을 함께 표시합니다. `수정`은 해당 항목이 강조된 식사 루틴 관리 화면을 열며, `건너뜀`은 섭취량 없이 별도 결과로 저장합니다. 실제 값은 `meal_records`에 예정 시각·음식·기본량 스냅샷과 함께 저장되므로 이후 루틴을 바꾸거나 중지해도 과거 기록은 변경되지 않습니다.
 
 ## 보안 주의사항
 

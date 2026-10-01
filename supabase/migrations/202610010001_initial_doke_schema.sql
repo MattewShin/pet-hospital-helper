@@ -80,6 +80,41 @@ create table if not exists public.timeline_records (
   unique (pet_id, legacy_id)
 );
 
+create table if not exists public.meal_routines (
+  id uuid primary key default gen_random_uuid(),
+  pet_id uuid not null references public.pets(id) on delete cascade,
+  created_by uuid not null references public.profiles(id),
+  time_minutes smallint not null check (time_minutes between 0 and 1439),
+  food_name text not null default '사료',
+  amount_grams numeric(7,1) not null check (amount_grams > 0 and amount_grams <= 999),
+  active boolean not null default true,
+  sort_order smallint not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (pet_id, time_minutes)
+);
+
+create table if not exists public.meal_records (
+  id uuid primary key default gen_random_uuid(),
+  pet_id uuid not null references public.pets(id) on delete cascade,
+  routine_id uuid,
+  routine_time_minutes smallint check (routine_time_minutes is null or routine_time_minutes between 0 and 1439),
+  created_by uuid not null references public.profiles(id),
+  occurred_at timestamptz not null,
+  local_date date not null,
+  food_name text not null check (char_length(food_name) between 1 and 80),
+  amount_grams numeric(7,1) check (amount_grams is null or amount_grams between 0 and 999),
+  planned_amount_grams numeric(7,1) check (planned_amount_grams is null or planned_amount_grams between 0 and 999),
+  status text not null check (status in ('confirmed', 'skipped')),
+  note text,
+  photo_url text,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists meal_records_one_routine_result_per_day
+  on public.meal_records (routine_id, local_date) where routine_id is not null;
+create index if not exists meal_records_pet_occurred_at
+  on public.meal_records (pet_id, occurred_at desc);
+
 create table if not exists public.hospital_records (
   id uuid primary key default gen_random_uuid(),
   pet_id uuid not null references public.pets(id) on delete cascade,
@@ -186,6 +221,33 @@ returns uuid language sql stable security definer set search_path = public as $$
   select household_id from public.pets where id = target_pet;
 $$;
 
+create or replace function public.replace_meal_routines(target_pet_id uuid, routine_items jsonb)
+returns setof public.meal_routines
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  if not public.is_household_owner(public.pet_household(target_pet_id)) then raise exception 'Only the household owner can manage meal routines'; end if;
+  if routine_items is null or jsonb_typeof(routine_items) <> 'array' then raise exception 'Meal routines must be an array'; end if;
+  if jsonb_array_length(routine_items) > 12 then raise exception 'Up to 12 meal routines are allowed'; end if;
+  if exists (
+    select 1 from jsonb_array_elements(routine_items) as item(value)
+    where item.value->>'id' is null
+      or item.value->>'timeMinutes' is null
+      or (item.value->>'timeMinutes')::integer not between 0 and 1439
+      or nullif(btrim(item.value->>'foodName'), '') is null
+      or char_length(item.value->>'foodName') > 80
+      or item.value->>'amountGrams' is null
+      or (item.value->>'amountGrams')::numeric <= 0
+      or (item.value->>'amountGrams')::numeric > 999
+  ) then raise exception 'Invalid meal routine value'; end if;
+  delete from public.meal_routines where pet_id = target_pet_id;
+  insert into public.meal_routines (id, pet_id, created_by, time_minutes, food_name, amount_grams, active, sort_order)
+  select (item.value->>'id')::uuid, target_pet_id, auth.uid(), (item.value->>'timeMinutes')::smallint, btrim(item.value->>'foodName'), (item.value->>'amountGrams')::numeric, coalesce((item.value->>'active')::boolean, true), (item.position - 1)::smallint
+  from jsonb_array_elements(routine_items) with ordinality as item(value, position);
+  return query select routine.* from public.meal_routines as routine where routine.pet_id = target_pet_id order by routine.time_minutes;
+end;
+$$;
+
 create or replace function public.create_household(household_name text)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare new_household_id uuid;
@@ -282,6 +344,8 @@ alter table public.household_members enable row level security;
 alter table public.invitations enable row level security;
 alter table public.pets enable row level security;
 alter table public.timeline_records enable row level security;
+alter table public.meal_routines enable row level security;
+alter table public.meal_records enable row level security;
 alter table public.hospital_records enable row level security;
 alter table public.data_migrations enable row level security;
 
@@ -315,6 +379,22 @@ create policy "pets_update_owner" on public.pets for update to authenticated
   using (public.is_household_owner(household_id)) with check (public.is_household_owner(household_id));
 create policy "pets_delete_owner" on public.pets for delete to authenticated
   using (public.is_household_owner(household_id));
+
+create policy "meal_routines_select_member" on public.meal_routines for select to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)));
+create policy "meal_routines_insert_owner" on public.meal_routines for insert to authenticated
+  with check (created_by = auth.uid() and public.is_household_owner(public.pet_household(pet_id)));
+create policy "meal_routines_update_owner" on public.meal_routines for update to authenticated
+  using (public.is_household_owner(public.pet_household(pet_id))) with check (public.is_household_owner(public.pet_household(pet_id)));
+create policy "meal_routines_delete_owner" on public.meal_routines for delete to authenticated
+  using (public.is_household_owner(public.pet_household(pet_id)));
+
+create policy "meal_records_select_member" on public.meal_records for select to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)));
+create policy "meal_records_insert_member" on public.meal_records for insert to authenticated
+  with check (created_by = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
+create policy "meal_records_delete_author_or_owner" on public.meal_records for delete to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)) and (created_by = auth.uid() or public.is_household_owner(public.pet_household(pet_id))));
 
 create policy "timeline_select_member" on public.timeline_records for select to authenticated
   using (public.is_active_household_member(public.pet_household(pet_id)));
@@ -362,6 +442,7 @@ revoke all on function public.shares_household(uuid) from public;
 revoke all on function public.pet_household(uuid) from public;
 revoke all on function public.create_household(text) from public;
 revoke all on function public.accept_invitation(uuid) from public;
+revoke all on function public.replace_meal_routines(uuid, jsonb) from public;
 grant execute on function public.is_active_household_member(uuid) to authenticated;
 grant execute on function public.is_household_owner(uuid) to authenticated;
 grant execute on function public.has_pending_household_invitation(uuid) to authenticated;
@@ -369,6 +450,7 @@ grant execute on function public.shares_household(uuid) to authenticated;
 grant execute on function public.pet_household(uuid) to authenticated;
 grant execute on function public.create_household(text) to authenticated;
 grant execute on function public.accept_invitation(uuid) to authenticated;
+grant execute on function public.replace_meal_routines(uuid, jsonb) to authenticated;
 
 do $$ begin
   alter publication supabase_realtime add table public.pets;
@@ -384,4 +466,10 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter publication supabase_realtime add table public.invitations;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.meal_routines;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.meal_records;
 exception when duplicate_object then null; end $$;

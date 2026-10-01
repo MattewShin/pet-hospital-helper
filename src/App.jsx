@@ -84,7 +84,27 @@ function toTimeMinutes(period, hour, minute) {
   return hour12 * 60 + Number(minute) + (period === '오후' ? 12 * 60 : 0)
 }
 
+function getTimePartsFromMinutes(timeMinutes) {
+  const normalized = Math.max(0, Math.min(1439, Number(timeMinutes) || 0))
+  const hour24 = Math.floor(normalized / 60)
+  return {
+    period: hour24 >= 12 ? '오후' : '오전',
+    hour: String(hour24 % 12 || 12),
+    minute: String(normalized % 60).padStart(2, '0'),
+  }
+}
+
+function formatRoutineTime(timeMinutes) {
+  const parts = getTimePartsFromMinutes(timeMinutes)
+  return formatTimeParts(parts.period, parts.hour, parts.minute)
+}
+
+function getLocalDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function getEventTimeMinutes(event) {
+  if (Number.isFinite(event.routineTimeMinutes)) return event.routineTimeMinutes
   if (Number.isFinite(event.timeMinutes)) return event.timeMinutes
   const match = event.time?.match(/(오전|오후)\s*(\d{1,2}):(\d{2})/)
   return match ? toTimeMinutes(match[1], match[2], match[3]) : -1
@@ -518,6 +538,8 @@ function DokeApp({ session }) {
   }
   const events = data.events.filter((event) => event.petId === profile.id)
   const allHospitalRecords = data.hospitalRecords.filter((record) => record.petId === profile.id)
+  const mealRoutines = workspace.mealRoutines.filter((routine) => routine.petId === profile.id).sort((a, b) => a.timeMinutes - b.timeMinutes)
+  const todayMealRecords = events.filter((event) => event.source === 'meal_record' && event.localDate === getLocalDateKey())
   const vomitCount = events.filter((event) => event.type === 'vomit').length
   const totalSpent = allHospitalRecords.reduce((sum, record) => sum + (record.amount || 0), 0)
 
@@ -548,11 +570,27 @@ function DokeApp({ session }) {
     const occurredAt = new Date()
     occurredAt.setHours(Math.floor(form.timeMinutes / 60), form.timeMinutes % 60, 0, 0)
     try {
-      await workspace.actions.createTimeline({ petId: profile.id, type: form.type, occurredAt: occurredAt.toISOString(), details: { title: isCustom ? form.title.trim() : recordType.label, detail: isCustom ? (form.note.trim() || '내용 미기록') : (observedValues.join(' · ') || '세부 내용 미기록'), note: isCustom ? '' : form.note }, photo: form.photo || '' })
+      if (form.type === 'meal') {
+        const amountMatch = String(form.amount || '').match(/\d+(?:\.\d+)?/)
+        await workspace.actions.createMealRecord({ petId: profile.id, routineId: form.routineId || null, routineTimeMinutes: form.routineTimeMinutes ?? null, occurredAt: occurredAt.toISOString(), localDate: getLocalDateKey(occurredAt), foodName: form.appearance.trim() || '음식 미입력', amountGrams: amountMatch ? Number(amountMatch[0]) : null, plannedAmountGrams: form.plannedAmountGrams == null ? (amountMatch ? Number(amountMatch[0]) : null) : Number(form.plannedAmountGrams), status: 'confirmed', note: form.note, photo: form.photo || '' })
+      } else {
+        await workspace.actions.createTimeline({ petId: profile.id, type: form.type, occurredAt: occurredAt.toISOString(), details: { title: isCustom ? form.title.trim() : recordType.label, detail: isCustom ? (form.note.trim() || '내용 미기록') : (observedValues.join(' · ') || '세부 내용 미기록'), note: isCustom ? '' : form.note }, photo: form.photo || '' })
+      }
       setSheet(null)
       notify(`${isCustom ? form.title.trim() : recordType.label} 기록을 저장했어요`)
     } catch (error) {
       notify(error.message || '기록을 저장하지 못했어요')
+    }
+  }
+
+  const confirmRoutineMeal = async (routine, status = 'confirmed') => {
+    const now = new Date()
+    try {
+      await workspace.actions.createMealRecord({ petId: profile.id, routineId: routine.id, routineTimeMinutes: routine.timeMinutes, occurredAt: now.toISOString(), localDate: getLocalDateKey(now), foodName: routine.foodName, amountGrams: status === 'skipped' ? null : routine.amountGrams, plannedAmountGrams: routine.amountGrams, status, note: '', photo: '' })
+      notify(status === 'skipped' ? '건너뛴 식사로 기록했어요' : `${routine.foodName} ${routine.amountGrams}g을 먹인 것으로 기록했어요`)
+    } catch (error) {
+      notify(error.message || '식사 확인 기록을 저장하지 못했어요')
+      throw error
     }
   }
 
@@ -611,6 +649,14 @@ function DokeApp({ session }) {
     }
   }
 
+  const saveMealRoutines = async (routines) => {
+    await workspace.actions.replaceMealRoutines(profile.id, routines)
+    notify(`${profile.name}의 식사 루틴을 저장했어요`)
+    setSheet(sheet?.returnTo === 'meal' ? { type: 'meal' } : null)
+  }
+
+  const closeMealRoutine = () => setSheet(sheet?.returnTo === 'meal' ? { type: 'meal' } : null)
+
   const openAccount = () => {
     setSheet(null)
     setActiveTab('account')
@@ -638,7 +684,9 @@ function DokeApp({ session }) {
 
   const deleteEvent = async (id) => {
     try {
-      await workspace.actions.deleteTimeline(id)
+      const target = events.find((event) => event.id === id)
+      if (target?.source === 'meal_record') await workspace.actions.deleteMealRecord(id)
+      else await workspace.actions.deleteTimeline(id)
       notify('기록을 삭제했어요')
     } catch (error) {
       notify(error.message || '기록을 삭제하지 못했어요')
@@ -720,7 +768,7 @@ function DokeApp({ session }) {
           />
         )}
         {activeTab === 'timeline' && (
-          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: 'timeline-edit', event })} canManage={(event) => workspace.isOwner || event.createdBy === session.user.id} />
+          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: 'timeline-edit', event })} canEdit={(event) => event.source !== 'meal_record' && (workspace.isOwner || event.createdBy === session.user.id)} canDelete={(event) => workspace.isOwner || event.createdBy === session.user.id} />
         )}
         {activeTab === 'briefing' && (
           <BriefingScreen count={vomitCount} copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} />
@@ -729,7 +777,7 @@ function DokeApp({ session }) {
           <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} onEdit={(record) => setSheet({ type: 'hospital-edit', record })} canEdit={(record) => workspace.isOwner || record.createdBy === session.user.id} />
         )}
         {activeTab === 'profile' && (
-          <ProfileScreen profile={profile} onSave={saveProfile} onPhotoChange={registerPetPhoto} canEdit={workspace.isOwner} />
+          <ProfileScreen profile={profile} onSave={saveProfile} onPhotoChange={registerPetPhoto} canEdit={workspace.isOwner} mealRoutines={mealRoutines} onManageMealRoutines={() => setSheet({ type: 'meal-routine', returnTo: 'profile' })} />
         )}
         {activeTab === 'family' && (
           <FamilyShareScreen
@@ -773,8 +821,10 @@ function DokeApp({ session }) {
         <ManualHospitalSheet initial={sheet.record} onClose={() => setSheet(null)} onSave={updateHospitalRecord} />
       ) : sheet?.type === 'timeline-edit' ? (
         <EditTimelineSheet event={sheet.event} onClose={() => setSheet(null)} onSave={updateEvent} />
+      ) : sheet?.type === 'meal-routine' ? (
+        <MealRoutineSheet petName={profile.name} routines={mealRoutines} focusRoutineId={sheet.focusRoutineId} onClose={closeMealRoutine} onSave={saveMealRoutines} />
       ) : sheet ? (
-        <LogSheet type={sheet.type} onClose={() => setSheet(null)} onSave={addEvent} />
+        <LogSheet type={sheet.type} onClose={() => setSheet(null)} onSave={addEvent} mealRoutines={mealRoutines} todayMealRecords={todayMealRecords} initialMeal={sheet.initialMeal || null} onConfirmRoutine={(routine) => confirmRoutineMeal(routine, 'confirmed')} onSkipRoutine={(routine) => confirmRoutineMeal(routine, 'skipped')} onModifyRoutine={workspace.isOwner ? (routine) => setSheet({ type: 'meal-routine', returnTo: 'meal', focusRoutineId: routine.id }) : null} onManageMealRoutines={workspace.isOwner ? () => setSheet({ type: 'meal-routine', returnTo: 'meal' }) : null} />
       ) : null}
 
       {toast && <div className="toast"><Check size={17} />{toast}</div>}
@@ -1078,7 +1128,7 @@ function InviteFamilySheet({ session, workspace, onClose }) {
 }
 
 function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onScanDocument, memberCount, legacyAvailable, onMigrate }) {
-  const latestMeal = events.find((event) => event.type === 'meal')
+  const latestMeal = events.find((event) => event.type === 'meal' && event.mealStatus !== 'skipped')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
   const mealGrams = mealMatch ? mealMatch[0].replace(/[^\d.]/g, '') : null
   const lastRecord = events[0]
@@ -1174,7 +1224,7 @@ function HomeScreen({ events, vomitCount, onQuickAdd, onNavigate, profile, onSca
   )
 }
 
-function TimelineScreen({ events, petName, onChooseRecord, onDelete, onEdit, canManage }) {
+function TimelineScreen({ events, petName, onChooseRecord, onDelete, onEdit, canEdit, canDelete }) {
   const [filter, setFilter] = useState('all')
   const [showMoreFilters, setShowMoreFilters] = useState(false)
   const filtered = filter === 'all' ? events : events.filter((event) => event.type === filter)
@@ -1206,7 +1256,7 @@ function TimelineScreen({ events, petName, onChooseRecord, onDelete, onEdit, can
           <section key={date}>
             <div className="date-divider"><span>{date}</span><i /></div>
             <div className="timeline-list">
-              {items.map((event) => <TimelineItem key={event.id} event={event} onDelete={canManage(event) ? onDelete : undefined} onEdit={canManage(event) ? onEdit : undefined} />)}
+              {items.map((event) => <TimelineItem key={`${event.source || 'timeline'}-${event.id}`} event={event} onDelete={canDelete(event) ? onDelete : undefined} onEdit={canEdit(event) ? onEdit : undefined} />)}
             </div>
           </section>
         ))}
@@ -1219,11 +1269,12 @@ function TimelineScreen({ events, petName, onChooseRecord, onDelete, onEdit, can
 function TimelineItem({ event, onDelete, onEdit }) {
   const type = recordTypes.find((item) => item.id === event.type) || customRecordType
   const Icon = type.icon
+  const routineMeal = event.source === 'meal_record' && Number.isFinite(event.routineTimeMinutes)
   return (
     <article className="timeline-item">
       <div className={`timeline-icon ${type.color}`}><Icon size={19} /></div>
       <div className="timeline-copy">
-        <div className="timeline-title"><strong>{event.title}</strong><time>{event.time.replace(`${event.date} `, '')}</time></div>
+        <div className={`timeline-title ${routineMeal ? 'routine-meal' : ''}`}><strong>{event.title}</strong><time>{routineMeal ? formatRoutineTime(event.routineTimeMinutes) : event.time.replace(`${event.date} `, '')}</time></div>
         <p>{event.detail}</p>
         {event.author && <small className="timeline-author">{honorificName(event.author)}이 기록{event.authorCreatedAtLabel ? ` · 작성 ${event.authorCreatedAtLabel}` : ''}</small>}
         {event.note && <span>{event.note}</span>}
@@ -1289,7 +1340,7 @@ function BriefingSection({ title, children }) {
   return <section className="document-section"><h3>{title}</h3>{children}</section>
 }
 
-function ProfileScreen({ profile, onSave, onPhotoChange, canEdit }) {
+function ProfileScreen({ profile, onSave, onPhotoChange, canEdit, mealRoutines = [], onManageMealRoutines }) {
   const [draft, setDraft] = useState(profile)
 
   useEffect(() => {
@@ -1349,6 +1400,14 @@ function ProfileScreen({ profile, onSave, onPhotoChange, canEdit }) {
         </section>
 
         </fieldset>
+
+        <section className="profile-form-section meal-routine-profile-card">
+          <div className="profile-section-title"><span>04</span><div><h3>식사 루틴</h3><p>자주 먹는 시간과 1회 급여량을 빠른 기록에 사용해요.</p></div></div>
+          {mealRoutines.length > 0 ? (
+            <div className="meal-routine-summary-list">{mealRoutines.map((routine) => <span key={routine.id} className={routine.active ? '' : 'inactive'}><Clock3 size={14} /> {formatRoutineTime(routine.timeMinutes)} · {routine.foodName} {routine.amountGrams}g{!routine.active && ' · 중지됨'}</span>)}</div>
+          ) : <p className="meal-routine-empty">등록된 식사 루틴이 없어요.</p>}
+          {canEdit && <button type="button" className="secondary-button meal-routine-manage-button" onClick={onManageMealRoutines}><SlidersHorizontal size={16} /> 식사 루틴 관리</button>}
+        </section>
 
         {canEdit && <div className="profile-save-bar">
           <p>{draft.birthDate ? `${getAgeLabel(draft.birthDate)} · ` : ''}{draft.breed || '품종 미입력'} · {draft.weight ? `${draft.weight}kg` : '몸무게 미입력'}</p>
@@ -1454,7 +1513,7 @@ function RecordTypeButton({ item, onClick }) {
   )
 }
 
-function LogSheet({ type, onClose, onSave }) {
+function LogSheet({ type, onClose, onSave, mealRoutines = [], todayMealRecords = [], initialMeal = null, onConfirmRoutine, onSkipRoutine, onModifyRoutine, onManageMealRoutines }) {
   const selected = recordTypes.find((item) => item.id === type) || customRecordType
   const isCustom = type === 'custom'
   const [form, setForm] = useState(() => {
@@ -1465,14 +1524,19 @@ function LogSheet({ type, onClose, onSave }) {
       ...currentTime,
       time: formatTimeParts(currentTime.period, currentTime.hour, currentTime.minute),
       timeMinutes: toTimeMinutes(currentTime.period, currentTime.hour, currentTime.minute),
-      appearance: '',
-      amount: '',
+      appearance: initialMeal?.foodName || '',
+      amount: initialMeal ? `${initialMeal.amountGrams}g` : '',
+      routineId: initialMeal?.id || '',
+      routineTimeMinutes: initialMeal?.timeMinutes ?? null,
+      plannedAmountGrams: initialMeal?.amountGrams ?? null,
       note: '',
       photo: '',
     }
   })
   const [photoName, setPhotoName] = useState('')
+  const [routineBusy, setRoutineBusy] = useState('')
   const Icon = selected.icon
+  const activeMealRoutines = mealRoutines.filter((routine) => routine.active)
 
   const updateTime = (key, value) => {
     setForm((current) => {
@@ -1496,6 +1560,18 @@ function LogSheet({ type, onClose, onSave }) {
     }
   }
 
+  const runRoutineAction = async (routine, action) => {
+    setRoutineBusy(`${routine.id}-${action}`)
+    try {
+      if (action === 'confirmed') await onConfirmRoutine(routine)
+      else await onSkipRoutine(routine)
+    } catch {
+      // 상위 화면에서 사용자 메시지를 표시합니다.
+    } finally {
+      setRoutineBusy('')
+    }
+  }
+
   return (
     <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <form className="bottom-sheet" onSubmit={(event) => { event.preventDefault(); onSave(form) }}>
@@ -1506,6 +1582,29 @@ function LogSheet({ type, onClose, onSave }) {
           <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
         </div>
         {isCustom && <label>기록 제목<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="예: 귀 청소, 기침, 피부 상태" /></label>}
+        {type === 'meal' && (activeMealRoutines.length > 0 || onManageMealRoutines) && (
+          <section className="meal-routine-quick-select">
+            <div><span>오늘의 예정 식사</span>{onManageMealRoutines && <button type="button" onClick={onManageMealRoutines}><SlidersHorizontal size={14} /> 관리</button>}</div>
+            {activeMealRoutines.length > 0 ? (
+              <div className="scheduled-meal-list">
+                {activeMealRoutines.map((routine) => {
+                  const record = todayMealRecords.find((item) => item.routineId === routine.id)
+                  const pendingStatus = routine.timeMinutes > new Date().getHours() * 60 + new Date().getMinutes() ? 'scheduled' : 'unrecorded'
+                  const status = record?.mealStatus || pendingStatus
+                  const statusLabel = { scheduled: '예정', unrecorded: '기록되지 않음', confirmed: '완료', skipped: '건너뜀' }[status]
+                  return (
+                    <article className={`scheduled-meal-card ${status}`} key={routine.id}>
+                      <div className="scheduled-meal-copy"><div><strong>{formatRoutineTime(routine.timeMinutes)}</strong><span className={`meal-status ${status}`}>{statusLabel}</span></div><p>{routine.foodName} · 기본 {routine.amountGrams}g</p>{record && <small>실제 확인 · {record.time.replace('오늘 ', '')}{record.mealStatus === 'confirmed' && record.amountGrams != null ? ` · ${record.amountGrams}g` : ''}</small>}</div>
+                      {!record && <div className={`scheduled-meal-actions ${onModifyRoutine ? '' : 'two-actions'}`}><button type="button" className="confirm" disabled={Boolean(routineBusy)} onClick={() => runRoutineAction(routine, 'confirmed')}>{routineBusy === `${routine.id}-confirmed` ? '저장 중…' : '먹였어요'}</button>{onModifyRoutine && <button type="button" onClick={() => onModifyRoutine(routine)}>수정</button>}<button type="button" className="skip" disabled={Boolean(routineBusy)} onClick={() => runRoutineAction(routine, 'skipped')}>{routineBusy === `${routine.id}-skipped` ? '저장 중…' : '건너뜀'}</button></div>}
+                      {record && onModifyRoutine && <div className="scheduled-meal-actions single-action"><button type="button" onClick={() => onModifyRoutine(routine)}>이 루틴 수정</button></div>}
+                    </article>
+                  )
+                })}
+              </div>
+            ) : <p>활성화된 루틴이 없어요. 직접 기록하거나 루틴을 등록해 주세요.</p>}
+          </section>
+        )}
+        {type === 'meal' && <div className="direct-meal-divider"><span>{initialMeal ? '내용을 수정해 실제 식사로 기록' : '루틴과 무관한 식사 직접 기록'}</span></div>}
         <div className="time-input-field">
           <span className="time-input-label">{type === 'weight' ? '측정 시간' : '발생 시간'}</span>
           <div className="time-input-row">
@@ -1533,6 +1632,111 @@ function LogSheet({ type, onClose, onSave }) {
           {photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진 첨부하기 (선택)'}
         </label>
         <button className="primary-button full" type="submit">기록 저장</button>
+      </form>
+    </div>
+  )
+}
+
+function mealRoutineDraft(routine = {}) {
+  const parts = getTimePartsFromMinutes(routine.timeMinutes ?? 390)
+  const id = routine.id || crypto.randomUUID()
+  return {
+    key: id,
+    id,
+    ...parts,
+    foodName: routine.foodName || '사료',
+    amountGrams: routine.amountGrams == null ? '24' : String(routine.amountGrams),
+    active: routine.active !== false,
+  }
+}
+
+function MealRoutineSheet({ petName, routines, focusRoutineId = '', onClose, onSave }) {
+  const [rows, setRows] = useState(() => routines.map(mealRoutineDraft))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const updateRow = (key, field, value) => setRows((current) => current.map((row) => row.key === key ? { ...row, [field]: value } : row))
+  const removeRow = (key) => setRows((current) => current.filter((row) => row.key !== key))
+  const addRow = () => {
+    if (rows.length >= 12) {
+      setError('식사 루틴은 최대 12회까지 등록할 수 있어요.')
+      return
+    }
+    const last = rows[rows.length - 1]
+    const nextMinutes = last ? (toTimeMinutes(last.period, last.hour, last.minute) + 360) % 1440 : 390
+    setRows((current) => [...current, mealRoutineDraft({ timeMinutes: nextMinutes, foodName: last?.foodName || '사료', amountGrams: last?.amountGrams || 24 })])
+    setError('')
+  }
+  const loadExample = () => {
+    setRows([390, 720, 1050, 1380].map((timeMinutes) => mealRoutineDraft({ timeMinutes, foodName: '사료', amountGrams: 24, active: true })))
+    setError('')
+  }
+
+  const submit = async (event) => {
+    event.preventDefault()
+    const normalized = rows.map((row) => ({ id: row.id, timeMinutes: toTimeMinutes(row.period, row.hour, row.minute), foodName: row.foodName.trim(), amountGrams: Number(row.amountGrams), active: row.active })).sort((a, b) => a.timeMinutes - b.timeMinutes)
+    if (normalized.some((routine) => !routine.foodName)) {
+      setError('각 식사의 사료 또는 음식 이름을 입력해 주세요.')
+      return
+    }
+    if (normalized.some((routine) => !Number.isFinite(routine.amountGrams) || routine.amountGrams <= 0)) {
+      setError('각 식사의 급여량을 0보다 큰 값으로 입력해 주세요.')
+      return
+    }
+    if (new Set(normalized.map((routine) => routine.timeMinutes)).size !== normalized.length) {
+      setError('같은 시간의 식사 루틴이 중복되어 있어요.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await onSave(normalized)
+    } catch (saveError) {
+      setError(saveError.message || '식사 루틴을 저장하지 못했어요.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="bottom-sheet meal-routine-sheet" onSubmit={submit}>
+        <div className="sheet-handle" />
+        <div className="sheet-header">
+          <div className="sheet-title-icon green"><Apple size={21} /></div>
+          <div><p>{petName}의 반복 일정</p><h2>식사 루틴 관리</h2></div>
+          <button type="button" className="icon-button" onClick={onClose}><X size={21} /></button>
+        </div>
+        <p className="meal-routine-description">평소 식사 시간과 1회 급여량을 등록하면 식사 기록에 바로 불러올 수 있어요.</p>
+
+        {rows.length === 0 ? (
+          <div className="meal-routine-editor-empty"><Apple size={23} /><strong>등록된 식사 시간이 없어요</strong><p>직접 추가하거나 4회 식사 예시를 불러와 시작해 보세요.</p></div>
+        ) : (
+          <div className="meal-routine-editor-list">
+            {rows.map((row, index) => (
+              <div className={`meal-routine-editor-row ${row.id === focusRoutineId ? 'editing-target' : ''}`} key={row.key}>
+                <strong className="meal-routine-index">{index + 1}</strong>
+                <div className="meal-routine-row-fields">
+                  <div className="routine-time-control">
+                    <div className="routine-period-toggle">{['오전', '오후'].map((period) => <button type="button" key={period} className={row.period === period ? 'selected' : ''} onClick={() => updateRow(row.key, 'period', period)}>{period}</button>)}</div>
+                    <select aria-label={`${index + 1}번째 식사 시`} value={row.hour} onChange={(event) => updateRow(row.key, 'hour', event.target.value)}>{Array.from({ length: 12 }, (_, hour) => hour + 1).map((hour) => <option key={hour} value={hour}>{hour}시</option>)}</select>
+                    <select aria-label={`${index + 1}번째 식사 분`} value={row.minute} onChange={(event) => updateRow(row.key, 'minute', event.target.value)}>{Array.from({ length: 12 }, (_, minute) => String(minute * 5).padStart(2, '0')).map((minute) => <option key={minute} value={minute}>{minute}분</option>)}</select>
+                  </div>
+                  <label className="routine-food-field">사료·음식<input autoFocus={row.id === focusRoutineId} required maxLength="80" value={row.foodName} onChange={(event) => updateRow(row.key, 'foodName', event.target.value)} placeholder="예: 주식 사료" /></label>
+                  <label>1회 급여량<div className="unit-input"><input required type="number" min="0.1" max="999" step="0.1" inputMode="decimal" value={row.amountGrams} onChange={(event) => updateRow(row.key, 'amountGrams', event.target.value)} /><span>g</span></div></label>
+                  <button type="button" className={`routine-active-toggle ${row.active ? 'active' : ''}`} onClick={() => updateRow(row.key, 'active', !row.active)}><Check size={14} /> {row.active ? '사용 중' : '사용 안 함'}</button>
+                </div>
+                <button type="button" className="routine-remove-button" aria-label={`${index + 1}번째 식사 삭제`} onClick={() => removeRow(row.key)}><Trash2 size={17} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="meal-routine-editor-actions">
+          <button type="button" className="secondary-button" onClick={addRow}><Plus size={16} /> 식사 시간 추가</button>
+          {routines.length === 0 && <button type="button" className="text-button" onClick={loadExample}>오전 6:30부터 4회 예시 불러오기</button>}
+        </div>
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        <button className="primary-button full" type="submit" disabled={busy}>{busy ? '저장 중…' : rows.length ? `하루 ${rows.length}회 루틴 저장` : '등록된 루틴 모두 삭제'}</button>
       </form>
     </div>
   )

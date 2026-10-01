@@ -177,6 +177,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .timeline-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .timeline-title strong { font-size: 14px; }
 .timeline-title time { color: #999990; font-size: 10px; white-space: nowrap; }
+.timeline-title.routine-meal { align-items: flex-start; flex-direction: column; gap: 3px; }
+.timeline-title.routine-meal time { color: var(--ink); font-size: 13px; font-weight: 800; }
 .timeline-copy p { margin: 4px 0 0; color: #4e504a; font-size: 12px; }
 .timeline-copy > span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .timeline-author { display: inline-block; margin-top: 6px; padding: 3px 6px; border-radius: 6px; background: #f0f2ed; color: var(--green); font-size: 9px; font-weight: 700; }
@@ -350,8 +352,72 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .profile-save-bar { position: sticky; bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 13px 12px 16px; border: 1px solid var(--line); border-radius: 17px; background: rgba(255,254,253,.96); backdrop-filter: blur(12px); }
 .profile-save-bar p { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .profile-save-bar .primary-button { min-height: 42px; flex: 0 0 auto; padding: 0 16px; }
+.meal-routine-profile-card { display: flex; flex-direction: column; }
+.meal-routine-summary-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.meal-routine-summary-list span { display: flex; align-items: center; gap: 5px; padding: 8px 10px; border-radius: 999px; background: var(--green-soft); color: var(--green-dark); font-size: 10px; font-weight: 700; }
+.meal-routine-summary-list span.inactive { background: #efeee9; color: var(--muted); text-decoration: line-through; }
+.meal-routine-empty { margin: 0; color: var(--muted); font-size: 10px; }
+.meal-routine-manage-button { align-self: flex-start; min-height: 40px; margin-top: 14px; padding: 0 13px; font-size: 10px; }
+.meal-routine-quick-select { margin-bottom: 16px; padding: 13px; border: 1px solid #d7e0d8; border-radius: 15px; background: #f0f4ef; }
+.meal-routine-quick-select > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.meal-routine-quick-select > div:first-child > span { color: var(--green-dark); font-size: 11px; font-weight: 800; }
+.meal-routine-quick-select > div:first-child > button { display: flex; align-items: center; gap: 4px; padding: 5px 7px; border: 0; background: transparent; color: var(--green); font-size: 9px; font-weight: 700; cursor: pointer; }
+.meal-routine-quick-select > p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+.scheduled-meal-list { display: flex; flex-direction: column; gap: 8px; }
+.scheduled-meal-card { overflow: hidden; border: 1px solid #d8dfd8; border-radius: 13px; background: var(--paper); }
+.scheduled-meal-card.confirmed { border-color: #b9cabb; background: #f8fbf8; }
+.scheduled-meal-card.skipped { border-color: #dfd8ce; background: #faf8f4; }
+.scheduled-meal-copy { padding: 11px 12px; }
+.scheduled-meal-copy > div { display: flex; align-items: center; gap: 7px; }
+.scheduled-meal-copy strong { font-size: 12px; }
+.scheduled-meal-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+.scheduled-meal-copy small { display: block; margin-top: 5px; color: var(--green); font-size: 9px; font-weight: 700; }
+.meal-status { margin-left: auto; padding: 4px 7px; border-radius: 999px; background: var(--amber-soft); color: #8c6338; font-size: 8px; font-weight: 800; }
+.meal-status.unrecorded { background: var(--coral-soft); color: #9b594b; }
+.meal-status.confirmed { background: var(--green-soft); color: var(--green-dark); }
+.meal-status.skipped { background: #ece9e2; color: #777168; }
+.scheduled-meal-actions { display: grid; grid-template-columns: 1.2fr 1fr 1fr; border-top: 1px solid var(--line); }
+.scheduled-meal-actions.two-actions { grid-template-columns: 1fr 1fr; }
+.scheduled-meal-actions.single-action { grid-template-columns: 1fr; }
+.scheduled-meal-actions button { min-height: 39px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 9px; font-weight: 700; cursor: pointer; }
+.scheduled-meal-actions button:last-child { border-right: 0; }
+.scheduled-meal-actions button.confirm { color: var(--green-dark); }
+.scheduled-meal-actions button.skip { color: #9b594b; }
+.scheduled-meal-actions button:disabled { cursor: wait; opacity: .55; }
+.direct-meal-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 15px; color: var(--muted); font-size: 9px; }
+.direct-meal-divider::before, .direct-meal-divider::after { height: 1px; flex: 1; background: var(--line); content: ''; }
+.meal-routine-chip-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.meal-routine-chip-list > button { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 7px; padding: 9px 10px; border: 1px solid #d8dfd8; border-radius: 11px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.meal-routine-chip-list > button.selected { border-color: var(--green-dark); background: var(--green-dark); color: white; }
+.meal-routine-chip-list strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.meal-routine-chip-list small { color: var(--green); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.meal-routine-chip-list > button.selected small { color: rgba(255,255,255,.75); }
+.meal-routine-description { margin: -7px 0 16px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.meal-routine-editor-empty { display: flex; flex-direction: column; align-items: center; padding: 26px 15px; border: 1px dashed #cdd5cd; border-radius: 16px; background: #faf9f6; color: var(--green); text-align: center; }
+.meal-routine-editor-empty strong { margin-top: 8px; color: var(--ink); font-size: 12px; }
+.meal-routine-editor-empty p { margin: 4px 0 0; color: var(--muted); font-size: 9px; }
+.meal-routine-editor-list { display: flex; flex-direction: column; gap: 9px; }
+.meal-routine-editor-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 34px; align-items: center; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 15px; background: #faf9f6; }
+.meal-routine-editor-row.editing-target { border-color: var(--green); background: #f1f6f1; box-shadow: 0 0 0 2px rgba(88, 117, 95, .12); }
+.meal-routine-index { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: var(--green-soft); color: var(--green-dark); font-size: 10px; }
+.meal-routine-row-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(92px, .45fr); align-items: end; gap: 9px; }
+.routine-time-control { display: grid; grid-template-columns: auto minmax(58px, .7fr) minmax(65px, .8fr); gap: 6px; }
+.meal-routine-row-fields .routine-time-control { grid-column: 1 / -1; }
+.routine-period-toggle { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 10px; background: #ebeae5; }
+.routine-period-toggle button { min-width: 42px; min-height: 38px; padding: 0 7px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
+.routine-period-toggle button.selected { background: var(--green-dark); color: white; font-weight: 700; }
+.routine-time-control select { min-width: 0; height: 44px; padding: 0 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); font-size: 11px; }
+.meal-routine-row-fields > label { gap: 5px; margin: 0; font-size: 9px; }
+.meal-routine-row-fields input { height: 44px; background: var(--paper); }
+.routine-active-toggle { display: flex; grid-column: 1 / -1; align-items: center; justify-content: center; gap: 5px; min-height: 34px; border: 1px solid var(--line); border-radius: 10px; background: #efeee9; color: var(--muted); font-size: 9px; font-weight: 700; cursor: pointer; }
+.routine-active-toggle.active { border-color: #c8d5ca; background: var(--green-soft); color: var(--green-dark); }
+.routine-remove-button { display: grid; width: 34px; height: 34px; place-items: center; border: 0; border-radius: 10px; background: var(--coral-soft); color: var(--coral); cursor: pointer; }
+.meal-routine-editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 13px 0; }
+.meal-routine-editor-actions .secondary-button { min-height: 40px; padding: 0 12px; font-size: 10px; }
+.meal-routine-editor-actions .text-button { font-size: 9px; }
 .record-picker-header { align-items: flex-start; }
-.record-picker-header > div:first-child { padding-top: 2px; }
+.record-picker-header > div:first-child { min-width: 0; flex: 1; padding-top: 2px; }
+.record-picker-header > .icon-button { margin-left: auto; }
 .record-picker-header > div:first-child span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 400; }
 .record-picker-section { margin-bottom: 19px; }
 .record-picker-section h3 { margin: 0 0 10px; color: #666760; font-size: 11px; }
@@ -499,6 +565,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .family-summary > strong { grid-column: 1 / -1; width: fit-content; }
   .account-actions { grid-template-columns: 1fr; }
   .account-actions .primary-button { grid-row: 1; }
+  .meal-routine-editor-row { grid-template-columns: 26px minmax(0, 1fr) 34px; align-items: start; padding: 10px; }
+  .meal-routine-row-fields { grid-template-columns: 1fr; }
+  .meal-routine-editor-actions { align-items: stretch; flex-direction: column; }
+  .meal-routine-editor-actions .secondary-button { width: 100%; }
 }
 
 @media (max-width: 370px) {
@@ -515,6 +585,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .profile-save-bar p { display: none; }
   .profile-save-bar .primary-button { width: 100%; }
   .add-pet-sheet .form-columns { grid-template-columns: 1fr; }
+  .meal-routine-chip-list { grid-template-columns: 1fr; }
+  .routine-time-control { grid-template-columns: 1fr 1fr; }
+  .routine-period-toggle { grid-column: 1 / -1; }
   .add-pet-sheet .full-field { grid-column: auto; }
 }
 

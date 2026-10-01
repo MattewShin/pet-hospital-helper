@@ -91,6 +91,37 @@ function timelineFromRow(row, author) {
   }
 }
 
+function mealRecordFromRow(row, author) {
+  const label = dateLabel(row.occurred_at)
+  const skipped = row.status === 'skipped'
+  return {
+    id: row.id,
+    petId: row.pet_id,
+    createdBy: row.created_by,
+    source: 'meal_record',
+    type: 'meal',
+    routineId: row.routine_id || '',
+    routineTimeMinutes: row.routine_time_minutes == null ? null : Number(row.routine_time_minutes),
+    localDate: row.local_date,
+    mealStatus: row.status,
+    foodName: row.food_name,
+    amountGrams: row.amount_grams == null ? null : Number(row.amount_grams),
+    plannedAmountGrams: row.planned_amount_grams == null ? null : Number(row.planned_amount_grams),
+    occurredAt: row.occurred_at,
+    title: skipped ? '식사 건너뜀' : '식사',
+    detail: skipped ? `${row.food_name} · 건너뜀` : `${row.food_name} · ${Number(row.amount_grams)}g`,
+    note: row.note || '',
+    date: label,
+    time: `${label} ${localTime(row.occurred_at)}`,
+    timeMinutes: timeMinutes(row.occurred_at),
+    author: author?.display_name || author?.email || '가족',
+    authorCreatedAt: row.created_at,
+    authorCreatedAtLabel: `${dateLabel(row.created_at)} ${localTime(row.created_at)}`,
+    photoPath: row.photo_url || '',
+    photo: '',
+  }
+}
+
 function hospitalFromRow(row, author) {
   const detail = row.details || {}
   return {
@@ -168,7 +199,7 @@ export function readLegacyData() {
 
 export function useDokeData(session) {
   const user = session.user
-  const [state, setState] = useState({ loading: true, error: '', households: [], household: null, membership: null, pets: [], selectedPetId: '', events: [], hospitalRecords: [], members: [], invitations: [], pendingInvitations: [], profile: null, legacyAvailable: false })
+  const [state, setState] = useState({ loading: true, error: '', households: [], household: null, membership: null, pets: [], selectedPetId: '', events: [], hospitalRecords: [], mealRoutines: [], members: [], invitations: [], pendingInvitations: [], profile: null, legacyAvailable: false })
 
   const load = useCallback(async () => {
     try {
@@ -191,16 +222,18 @@ export function useDokeData(session) {
       const { data: petRows, error: petsError } = await supabase.from('pets').select('*').eq('household_id', household.id).order('created_at')
       if (petsError) throw petsError
       const petIds = (petRows || []).map((pet) => pet.id)
-      const [timelineResponse, hospitalResponse, membersResponse, invitationsResponse, migrationResponse] = await Promise.all([
+      const [timelineResponse, mealRecordResponse, hospitalResponse, mealRoutineResponse, membersResponse, invitationsResponse, migrationResponse] = await Promise.all([
         petIds.length ? supabase.from('timeline_records').select('*').in('pet_id', petIds).order('occurred_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
+        petIds.length ? supabase.from('meal_records').select('*').in('pet_id', petIds).order('occurred_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
         petIds.length ? supabase.from('hospital_records').select('*').in('pet_id', petIds).order('visited_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
+        petIds.length ? supabase.from('meal_routines').select('*').in('pet_id', petIds).order('time_minutes') : Promise.resolve({ data: [], error: null }),
         supabase.from('household_members').select('*').eq('household_id', household.id).eq('status', 'ACTIVE').order('joined_at'),
         supabase.from('invitations').select('*').eq('household_id', household.id).order('created_at', { ascending: false }),
         supabase.from('data_migrations').select('id').eq('user_id', user.id).eq('source', 'doke-local-v1').maybeSingle(),
       ])
-      const firstError = [timelineResponse, hospitalResponse, membersResponse, invitationsResponse].find((response) => response.error)?.error
+      const firstError = [timelineResponse, mealRecordResponse, hospitalResponse, mealRoutineResponse, membersResponse, invitationsResponse].find((response) => response.error)?.error
       if (firstError) throw firstError
-      const creatorIds = [...new Set([...(timelineResponse.data || []), ...(hospitalResponse.data || []), ...(membersResponse.data || [])].map((item) => item.created_by || item.user_id).filter(Boolean))]
+      const creatorIds = [...new Set([...(timelineResponse.data || []), ...(mealRecordResponse.data || []), ...(hospitalResponse.data || []), ...(membersResponse.data || [])].map((item) => item.created_by || item.user_id).filter(Boolean))]
       const { data: profileRows } = creatorIds.length ? await supabase.from('profiles').select('*').in('id', creatorIds) : { data: [] }
       const profileMap = new Map((profileRows || []).map((item) => [item.id, item]))
       const pets = await Promise.all((petRows || []).map(async (row) => petFromRow(row, await signedMediaUrl(row.photo_url))))
@@ -208,10 +241,13 @@ export function useDokeData(session) {
       const savedPetId = window.localStorage.getItem(selectedPetKey)
       const selectedPetId = pets.some((pet) => pet.id === savedPetId) ? savedPetId : pets[0]?.id || ''
       if (selectedPetId) window.localStorage.setItem(selectedPetKey, selectedPetId)
-      const events = await Promise.all((timelineResponse.data || []).map(async (row) => ({ ...timelineFromRow(row, profileMap.get(row.created_by)), photo: await signedMediaUrl(row.photo_url) })))
+      const timelineEvents = await Promise.all((timelineResponse.data || []).map(async (row) => ({ ...timelineFromRow(row, profileMap.get(row.created_by)), photo: await signedMediaUrl(row.photo_url) })))
+      const mealEvents = await Promise.all((mealRecordResponse.data || []).map(async (row) => ({ ...mealRecordFromRow(row, profileMap.get(row.created_by)), photo: await signedMediaUrl(row.photo_url) })))
+      const events = [...timelineEvents, ...mealEvents].sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt))
       const hospitalRecords = await Promise.all((hospitalResponse.data || []).map(async (row) => ({ ...hospitalFromRow(row, profileMap.get(row.created_by)), photo: await signedMediaUrl(row.photo_url) })))
+      const mealRoutines = (mealRoutineResponse.data || []).map((row) => ({ id: row.id, petId: row.pet_id, timeMinutes: row.time_minutes, foodName: row.food_name || '사료', amountGrams: Number(row.amount_grams), active: row.active !== false, sortOrder: row.sort_order }))
       const members = (membersResponse.data || []).map((member) => ({ ...member, profile: profileMap.get(member.user_id) || null }))
-      setState({ loading: false, error: '', households: householdChoices, household, membership, pets, selectedPetId, events, hospitalRecords, members, invitations: invitationsResponse.data || [], pendingInvitations: pendingInvitations || [], profile, legacyAvailable: Boolean(readLegacyData() && !migrationResponse.data) })
+      setState({ loading: false, error: '', households: householdChoices, household, membership, pets, selectedPetId, events, hospitalRecords, mealRoutines, members, invitations: invitationsResponse.data || [], pendingInvitations: pendingInvitations || [], profile, legacyAvailable: Boolean(readLegacyData() && !migrationResponse.data) })
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error: error.message || '데이터를 불러오지 못했습니다.' }))
     }
@@ -223,7 +259,9 @@ export function useDokeData(session) {
     const channel = supabase.channel(`doke-${user.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pets' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'timeline_records' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'meal_records' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'hospital_records' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'meal_routines' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'household_members' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'invitations' }, load)
       .subscribe()
@@ -273,6 +311,40 @@ export function useDokeData(session) {
         .from('profiles')
         .update({ display_name: normalizedName })
         .eq('id', user.id)
+      if (error) throw error
+      await load()
+    },
+    async replaceMealRoutines(petId, routines) {
+      if (!isOwner) throw new Error('관리자만 식사 루틴을 수정할 수 있습니다.')
+      if (!state.pets.some((pet) => pet.id === petId)) throw new Error('접근할 수 없는 반려견입니다.')
+      const routineItems = routines.map((routine) => ({ id: routine.id, timeMinutes: Number(routine.timeMinutes), foodName: routine.foodName, amountGrams: Number(routine.amountGrams), active: routine.active !== false }))
+      const { error } = await supabase.rpc('replace_meal_routines', { target_pet_id: petId, routine_items: routineItems })
+      if (error) throw error
+      await load()
+    },
+    async createMealRecord(record) {
+      const photoPath = await uploadDataUrl(householdId, user.id, record.photo, 'meal')
+      const localDate = record.localDate || todayKey(new Date(record.occurredAt))
+      const { error } = await supabase.from('meal_records').insert({
+        pet_id: record.petId,
+        routine_id: record.routineId || null,
+        routine_time_minutes: record.routineTimeMinutes ?? null,
+        created_by: user.id,
+        occurred_at: record.occurredAt,
+        local_date: localDate,
+        food_name: record.foodName,
+        amount_grams: record.amountGrams,
+        planned_amount_grams: record.plannedAmountGrams,
+        status: record.status,
+        note: record.note || null,
+        photo_url: photoPath,
+      })
+      if (error?.code === '23505') throw new Error('이 예정 식사는 오늘 이미 확인했어요.')
+      if (error) throw error
+      await load()
+    },
+    async deleteMealRecord(id) {
+      const { error } = await supabase.from('meal_records').delete().eq('id', id)
       if (error) throw error
       await load()
     },
