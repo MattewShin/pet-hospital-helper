@@ -1000,7 +1000,6 @@ function DokeApp({ session }) {
             onOpenBannerMenu={() => setSheet({ type: 'banner-menu' })}
             onOpenTodayRecords={() => setActiveTab('timeline')}
             onScanDocument={() => setSheet({ type: 'receipt' })}
-            memberCount={workspace.members.length}
             healthRoutines={activeHealthRoutines}
             onOpenHealthNotifications={() => setSheet({ type: 'health-notifications' })}
             onManageHealthRoutines={() => setActiveTab('health-routines')}
@@ -1543,10 +1542,9 @@ function BannerSettingsSheet({ petName, section, preference, onBack, onClose, on
   )
 }
 
-function HomeScreen({ events, onQuickAdd, onNavigate, profile, onViewPhoto, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, memberCount, healthRoutines = [], onOpenHealthNotifications, onManageHealthRoutines, onCompleteHealthRoutine, onPostponeHealthRoutine, onEditHealthRoutine, legacyAvailable, onMigrate }) {
+function HomeScreen({ events, onQuickAdd, onNavigate, profile, onViewPhoto, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, healthRoutines = [], onOpenHealthNotifications, onManageHealthRoutines, onCompleteHealthRoutine, onPostponeHealthRoutine, onEditHealthRoutine, legacyAvailable, onMigrate }) {
   const latestMeal = events.find((event) => event.type === 'meal' && event.mealStatus !== 'skipped')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
-  const lastRecord = events[0]
   const latestMedicine = events.find((event) => event.type === 'medicine')
   const todayEvents = events.filter(isEventToday)
   const latestActivity = todayEvents.find((event) => event.type === 'activity')
@@ -1618,17 +1616,6 @@ function HomeScreen({ events, onQuickAdd, onNavigate, profile, onViewPhoto, hosp
         ) : (
           <button type="button" className="health-routine-empty-action" onClick={onManageHealthRoutines}><ShieldCheck size={20} /><span><strong>등록된 건강 루틴이 없어요</strong><small>예방약·접종·검진 일정을 직접 등록해 보세요.</small></span><ChevronRight size={17} /></button>
         )}
-      </section>
-
-      <section className="shared-care-card">
-        <div className="shared-care-heading">
-          <div className="shared-care-title"><span><UsersRound size={18} /></span><div><p>초대된 가족만 볼 수 있어요</p><h2>최근 가족 활동</h2></div></div>
-          <strong className="pending-pill">{memberCount}명 참여</strong>
-        </div>
-        <div className="shared-care-details">
-          <div><span>마지막 기록</span><strong>{lastRecord ? `${honorificName(lastRecord.author || '보호자')} · ${lastRecord.time?.replace('오늘 ', '')}` : '아직 기록이 없어요'}</strong></div>
-          <div><span>공유 범위</span><strong>이 가족 공간의 활성 구성원</strong></div>
-        </div>
       </section>
 
       <section className="section-block">
