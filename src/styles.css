@@ -102,6 +102,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .condition-card.theme-beige { --banner-text: #392f25; --banner-muted: rgba(57,47,37,.68); --banner-line: rgba(57,47,37,.15); --banner-surface: rgba(255,255,255,.42); --banner-accent: #5f765f; background: #dfcfb7; }
 .condition-card.theme-sky { --banner-text: #263f4a; --banner-muted: rgba(38,63,74,.68); --banner-line: rgba(38,63,74,.14); --banner-surface: rgba(255,255,255,.46); --banner-accent: #4e7280; background: #cfe3eb; }
 .condition-topline { display: flex; align-items: center; gap: 12px; }
+.condition-photo-button, .briefing-photo-button { display: grid; flex: 0 0 auto; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: zoom-in; }
+.condition-photo-button:focus-visible, .briefing-photo-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 .condition-main-action { display: flex; min-width: 0; flex: 1; align-items: center; gap: 12px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .condition-main-action:focus-visible, .more-button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: 8px; }
 .pet-avatar { --avatar-size: 46px; position: relative; display: grid; place-items: center; flex: 0 0 auto; width: var(--avatar-size); min-width: var(--avatar-size); max-width: var(--avatar-size); height: var(--avatar-size); min-height: var(--avatar-size); max-height: var(--avatar-size); aspect-ratio: 1 / 1; border: 2px solid rgba(255,255,255,.74); border-radius: 999px; background: #d8b991; color: #5f4936; isolation: isolate; }
@@ -109,8 +111,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .pet-avatar.large { --avatar-size: 54px; border-color: white; }
 .pet-avatar.editable { cursor: pointer; }
 .pet-avatar.editable input { display: none; }
+.pet-avatar.photo-view-trigger { cursor: zoom-in; }
+.pet-avatar.photo-view-button { padding: 0; border: 0; cursor: zoom-in; }
 .pet-avatar img { position: absolute; z-index: 1; inset: 0; display: block; width: 100%; height: 100%; border-radius: 999px; object-fit: cover; object-position: center; }
-.avatar-camera { position: absolute; z-index: 2; right: -3px; bottom: -2px; display: grid; place-items: center; width: 19px; height: 19px; border: 2px solid var(--paper); border-radius: 50%; background: var(--green-dark); color: white; font-style: normal; transition: transform .18s ease; }
+.avatar-camera { position: absolute; z-index: 2; right: -3px; bottom: -2px; display: grid; place-items: center; width: 19px; height: 19px; border: 2px solid var(--paper); border-radius: 50%; background: var(--green-dark); color: white; cursor: pointer; font-style: normal; transition: transform .18s ease; }
 .pet-avatar.editable:hover .avatar-camera { transform: scale(1.1); }
 .condition-card .avatar-camera { border-color: currentColor; background: white; color: var(--green-dark); }
 .condition-card.theme-beige .pet-avatar, .condition-card.theme-sky .pet-avatar { border-color: rgba(38,48,45,.35); }
@@ -255,6 +259,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .briefing-pet .pet-avatar { --avatar-size: 42px; border-color: var(--paper); }
 .briefing-pet strong { font-size: 14px; }
 .briefing-pet p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.pet-photo-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 28px; background: rgba(18, 23, 19, .82); animation: fade-in .18s ease; }
+.pet-photo-close { position: fixed; top: 20px; right: 20px; display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(255,255,255,.34); border-radius: 50%; background: rgba(0,0,0,.2); color: white; cursor: pointer; }
+.pet-photo-viewer { display: flex; max-width: min(90vw, 580px); max-height: min(80vh, 680px); margin: 0; flex-direction: column; align-items: center; gap: 12px; }
+.pet-photo-viewer img { display: block; max-width: 100%; max-height: calc(min(80vh, 680px) - 34px); border: 4px solid rgba(255,255,255,.92); border-radius: 24px; object-fit: contain; box-shadow: 0 22px 65px rgba(0,0,0,.35); }
+.pet-photo-viewer figcaption { color: white; font-size: 13px; font-weight: 800; }
 .period-control { display: grid; grid-template-columns: repeat(3, 1fr); padding: 3px; border-radius: 12px; background: #efeee9; }
 .period-control button { padding: 7px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
 .period-control button.active { background: var(--paper); color: var(--ink); font-weight: 700; }

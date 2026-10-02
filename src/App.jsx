@@ -994,6 +994,7 @@ function DokeApp({ session }) {
             onQuickAdd={(type) => setSheet({ type })}
             onNavigate={setActiveTab}
             profile={profile}
+            onViewPhoto={() => setSheet({ type: 'pet-photo-view', pet: profile })}
             hospitalRecords={allHospitalRecords}
             bannerPreference={bannerPreference}
             onOpenBannerMenu={() => setSheet({ type: 'banner-menu' })}
@@ -1014,13 +1015,13 @@ function DokeApp({ session }) {
           <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: event.source === 'meal_record' ? 'meal-edit' : 'timeline-edit', event })} canEdit={(event) => workspace.isOwner || event.createdBy === session.user.id} canDelete={(event) => workspace.isOwner || event.createdBy === session.user.id} />
         )}
         {activeTab === 'briefing' && (
-          <BriefingScreen copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} />
+          <BriefingScreen copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} onViewPhoto={() => setSheet({ type: 'pet-photo-view', pet: profile })} />
         )}
         {activeTab === 'records' && (
           <RecordsScreen records={allHospitalRecords} total={totalSpent} onAdd={() => setSheet({ type: 'hospital-add-picker' })} onEdit={(record) => setSheet({ type: 'hospital-edit', record })} canEdit={(record) => workspace.isOwner || record.createdBy === session.user.id} />
         )}
         {activeTab === 'profile' && (
-          <ProfileScreen profile={profile} onSave={saveProfile} onDelete={() => setSheet({ type: 'pet-delete', pet: profile })} onPhotoChange={registerPetPhoto} canEdit={workspace.isOwner} mealRoutines={mealRoutines} onManageMealRoutines={() => setSheet({ type: 'meal-routine', returnTo: 'profile' })} healthRoutines={activeHealthRoutines} onManageHealthRoutines={() => setActiveTab('health-routines')} />
+          <ProfileScreen profile={profile} onSave={saveProfile} onDelete={() => setSheet({ type: 'pet-delete', pet: profile })} onPhotoChange={registerPetPhoto} onViewPhoto={() => setSheet({ type: 'pet-photo-view', pet: profile })} canEdit={workspace.isOwner} mealRoutines={mealRoutines} onManageMealRoutines={() => setSheet({ type: 'meal-routine', returnTo: 'profile' })} healthRoutines={activeHealthRoutines} onManageHealthRoutines={() => setActiveTab('health-routines')} />
         )}
         {activeTab === 'health-routines' && (
           <HealthRoutineScreen petName={profile.name} routines={activeHealthRoutines} completions={healthRoutineCompletions} onBack={() => setActiveTab('profile')} onAdd={() => setSheet({ type: 'health-routine-form' })} onComplete={(routine) => setSheet({ type: 'health-complete', routine })} onPostpone={(routine) => setSheet({ type: 'health-postpone', routine })} onEdit={(routine) => setSheet({ type: 'health-routine-form', routine })} />
@@ -1059,6 +1060,8 @@ function DokeApp({ session }) {
         <AddPetSheet onClose={() => setSheet(null)} onSave={addPet} />
       ) : sheet?.type === 'pet-delete' ? (
         <DeletePetSheet pet={sheet.pet} onClose={() => setSheet(null)} onDelete={deletePet} />
+      ) : sheet?.type === 'pet-photo-view' ? (
+        <PetPhotoViewer pet={sheet.pet} onClose={() => setSheet(null)} />
       ) : sheet?.type === 'family-invite' ? (
         <InviteFamilySheet session={session} workspace={workspace} onClose={() => setSheet(null)} />
       ) : sheet?.type === 'receipt' ? (
@@ -1117,18 +1120,38 @@ function resizeImage(file) {
   })
 }
 
-function PetAvatar({ photo, name = '반려견', large = false, onPhotoChange, profile = false }) {
+function PetAvatar({ photo, name = '반려견', large = false, onPhotoChange, onViewPhoto, profile = false }) {
   const content = photo ? <img src={photo} alt={`${name} 프로필`} /> : <span>{name.slice(0, 2)}</span>
+  const className = `pet-avatar ${large ? 'large' : ''} ${profile ? 'profile-photo' : ''}`
+  const openOnKeyboard = (event) => {
+    if (onViewPhoto && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault()
+      onViewPhoto()
+    }
+  }
   if (onPhotoChange) {
     return (
-      <label className={`pet-avatar editable ${large ? 'large' : ''} ${profile ? 'profile-photo' : ''}`} title={`${name} 사진 등록 또는 변경`}>
+      <div className={`${className} editable ${onViewPhoto ? 'photo-view-trigger' : ''}`} role={onViewPhoto ? 'button' : undefined} tabIndex={onViewPhoto ? 0 : undefined} onClick={onViewPhoto} onKeyDown={openOnKeyboard} title={onViewPhoto ? `${name} 사진 크게 보기` : `${name} 사진 등록 또는 변경`}>
         {content}
-        <input type="file" accept="image/*" onChange={(event) => onPhotoChange(event.target.files?.[0])} />
-        <i className="avatar-camera"><Camera size={profile ? 16 : 10} strokeWidth={2.5} /></i>
-      </label>
+        <label className="avatar-camera" title={`${name} 사진 등록 또는 변경`} onClick={(event) => event.stopPropagation()}>
+          <input type="file" accept="image/*" onChange={(event) => onPhotoChange(event.target.files?.[0])} />
+          <Camera size={profile ? 16 : 10} strokeWidth={2.5} />
+        </label>
+      </div>
     )
   }
-  return <div className={`pet-avatar ${large ? 'large' : ''}`}>{content}</div>
+  if (onViewPhoto) return <button type="button" className={`${className} photo-view-button`} onClick={onViewPhoto} title={`${name} 사진 크게 보기`}>{content}</button>
+  return <div className={className}>{content}</div>
+}
+
+function PetPhotoViewer({ pet, onClose }) {
+  useEscapeClose(onClose)
+  return (
+    <div className="pet-photo-backdrop" role="dialog" aria-modal="true" aria-label={`${pet.name} 사진 크게 보기`} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <button type="button" className="pet-photo-close" onClick={onClose} aria-label="사진 크게 보기 닫기"><X size={24} /></button>
+      <figure className="pet-photo-viewer"><img src={pet.photo} alt={`${pet.name} 프로필 사진`} /><figcaption>{pet.name}</figcaption></figure>
+    </div>
+  )
 }
 
 function PetSwitcherSheet({ pets, selectedPetId, onClose, onSelect, onAdd, canManage, onAccount, onLogout }) {
@@ -1520,7 +1543,7 @@ function BannerSettingsSheet({ petName, section, preference, onBack, onClose, on
   )
 }
 
-function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, memberCount, healthRoutines = [], onOpenHealthNotifications, onManageHealthRoutines, onCompleteHealthRoutine, onPostponeHealthRoutine, onEditHealthRoutine, legacyAvailable, onMigrate }) {
+function HomeScreen({ events, onQuickAdd, onNavigate, profile, onViewPhoto, hospitalRecords, bannerPreference, onOpenBannerMenu, onOpenTodayRecords, onScanDocument, memberCount, healthRoutines = [], onOpenHealthNotifications, onManageHealthRoutines, onCompleteHealthRoutine, onPostponeHealthRoutine, onEditHealthRoutine, legacyAvailable, onMigrate }) {
   const latestMeal = events.find((event) => event.type === 'meal' && event.mealStatus !== 'skipped')
   const mealMatch = latestMeal?.detail?.match(/\d+(?:\.\d+)?\s*g/i)
   const lastRecord = events[0]
@@ -1562,8 +1585,8 @@ function HomeScreen({ events, onQuickAdd, onNavigate, profile, hospitalRecords, 
 
       <section className={`condition-card theme-${bannerPreference.bannerTheme || 'green'}`}>
         <div className="condition-topline">
+          {profile.photo ? <button type="button" className="condition-photo-button" onClick={onViewPhoto} aria-label={`${profile.name} 사진 크게 보기`}><PetAvatar photo={profile.photo} name={profile.name} /></button> : <PetAvatar photo={profile.photo} name={profile.name} />}
           <button type="button" className="condition-main-action" onClick={onOpenTodayRecords} aria-label={`${profile.name}의 오늘 기록 화면 열기`}>
-            <PetAvatar photo={profile.photo} name={profile.name} />
             <div className="condition-title">
               <p>{profile.name}의 오늘</p>
               <h2>{todayEvents.length ? `오늘 ${todayEvents.length}건을 함께 기록했어요` : '오늘 컨디션을 기록해 주세요'}</h2>
@@ -1715,7 +1738,7 @@ function TimelineItem({ event, onDelete, onEdit }) {
   )
 }
 
-function BriefingScreen({ copied, onCopy, onPrint, profile, events, hospitalRecords }) {
+function BriefingScreen({ copied, onCopy, onPrint, profile, events, hospitalRecords, onViewPhoto }) {
   const [period, setPeriod] = useState('24시간')
   const periodEvents = eventsInPeriod(events, period)
   const latestMeal = periodEvents.find((event) => event.type === 'meal')
@@ -1729,7 +1752,7 @@ function BriefingScreen({ copied, onCopy, onPrint, profile, events, hospitalReco
     <div className="screen briefing-screen">
       <Header eyebrow="병원에 가기 전 준비" title="진료 브리핑" />
       <div className="briefing-intro">
-        <div className="briefing-pet"><PetAvatar photo={profile.photo} name={profile.name} /><div><strong>{profile.name}</strong><p>{profile.breed} · {getAgeLabel(profile.birthDate)} · {profile.weight || '-'}kg</p></div></div>
+        <div className="briefing-pet">{profile.photo ? <button type="button" className="briefing-photo-button" onClick={onViewPhoto} aria-label={`${profile.name} 사진 크게 보기`}><PetAvatar photo={profile.photo} name={profile.name} /></button> : <PetAvatar photo={profile.photo} name={profile.name} />}<div><strong>{profile.name}</strong><p>{profile.breed} · {getAgeLabel(profile.birthDate)} · {profile.weight || '-'}kg</p></div></div>
         <div className="period-control">
           {['24시간', '3일', '7일'].map((item) => <button key={item} className={period === item ? 'active' : ''} onClick={() => setPeriod(item)}>{item}</button>)}
         </div>
@@ -1956,7 +1979,7 @@ function HealthRoutinePostponeSheet({ routine, onClose, onSave }) {
   )
 }
 
-function ProfileScreen({ profile, onSave, onDelete, onPhotoChange, canEdit, mealRoutines = [], onManageMealRoutines, healthRoutines = [], onManageHealthRoutines }) {
+function ProfileScreen({ profile, onSave, onDelete, onPhotoChange, onViewPhoto, canEdit, mealRoutines = [], onManageMealRoutines, healthRoutines = [], onManageHealthRoutines }) {
   const [draft, setDraft] = useState(profile)
 
   useEffect(() => {
@@ -1974,7 +1997,7 @@ function ProfileScreen({ profile, onSave, onDelete, onPhotoChange, canEdit, meal
       <Header eyebrow="건강 기록의 기준 정보" title="반려견 프로필" />
 
       <section className="profile-hero">
-        <PetAvatar photo={profile.photo} name={draft.name || '반려견'} onPhotoChange={canEdit ? onPhotoChange : undefined} profile />
+        <PetAvatar photo={profile.photo} name={draft.name || '반려견'} onPhotoChange={canEdit ? onPhotoChange : undefined} onViewPhoto={profile.photo ? onViewPhoto : undefined} profile />
         <div>
           <span>대표 사진</span>
           <h2>{draft.name || '이름을 입력해 주세요'}</h2>
