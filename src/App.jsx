@@ -128,6 +128,11 @@ function getTimeGreeting(date = new Date()) {
   return '좋은 저녁이에요'
 }
 
+function formatSavedTime(value) {
+  if (!value) return ''
+  return new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(value))
+}
+
 function authErrorMessage(error, mode) {
   const message = error?.message || ''
   if (mode === 'login' && (error?.code === 'invalid_credentials' || /invalid login credentials/i.test(message))) return '비밀번호를 확인해주세요'
@@ -710,7 +715,7 @@ function DokeApp({ session }) {
     const recordType = recordTypes.find((item) => item.id === form.type) || customRecordType
     const observedValues = recordType.fields.map((field) => form[field.key]).filter(Boolean)
     const isCustom = form.type === 'custom'
-    const occurredAt = new Date()
+    const occurredAt = new Date(`${form.date}T00:00:00`)
     occurredAt.setHours(Math.floor(form.timeMinutes / 60), form.timeMinutes % 60, 0, 0)
     try {
       if (form.type === 'meal') {
@@ -761,7 +766,7 @@ function DokeApp({ session }) {
 
   const updateEvent = async (form) => {
     const record = sheet.event
-    const occurredAt = new Date(record.occurredAt)
+    const occurredAt = new Date(`${form.date}T00:00:00`)
     occurredAt.setHours(Math.floor(form.timeMinutes / 60), form.timeMinutes % 60, 0, 0)
     try {
       await workspace.actions.updateTimeline({ id: record.id, occurredAt: occurredAt.toISOString(), details: { title: record.title, detail: form.detail.trim() || '세부 내용 미기록', note: form.note.trim() }, photo: form.photo, photoPath: record.photoPath })
@@ -769,6 +774,29 @@ function DokeApp({ session }) {
       notify('내 기록을 수정했어요')
     } catch (error) {
       notify(error.message || '기록을 수정하지 못했어요')
+    }
+  }
+
+  const updateMealEvent = async (form) => {
+    const record = sheet.event
+    const occurredAt = new Date(`${form.date}T00:00:00`)
+    occurredAt.setHours(Math.floor(form.timeMinutes / 60), form.timeMinutes % 60, 0, 0)
+    try {
+      await workspace.actions.updateMealRecord({
+        id: record.id,
+        occurredAt: occurredAt.toISOString(),
+        localDate: getLocalDateKey(occurredAt),
+        foodName: form.foodName.trim() || '음식 미입력',
+        amountGrams: form.status === 'skipped' ? null : Number(form.amountGrams),
+        status: form.status,
+        note: form.note.trim(),
+        photo: form.photo,
+        photoPath: record.photoPath,
+      })
+      setSheet(null)
+      notify('식사 기록을 수정했어요')
+    } catch (error) {
+      notify(error.message || '식사 기록을 수정하지 못했어요')
     }
   }
 
@@ -983,7 +1011,7 @@ function DokeApp({ session }) {
           />
         )}
         {activeTab === 'timeline' && (
-          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: 'timeline-edit', event })} canEdit={(event) => event.source !== 'meal_record' && (workspace.isOwner || event.createdBy === session.user.id)} canDelete={(event) => workspace.isOwner || event.createdBy === session.user.id} />
+          <TimelineScreen events={events} petName={profile.name} onChooseRecord={() => setSheet({ type: 'record-picker' })} onDelete={deleteEvent} onEdit={(event) => setSheet({ type: event.source === 'meal_record' ? 'meal-edit' : 'timeline-edit', event })} canEdit={(event) => workspace.isOwner || event.createdBy === session.user.id} canDelete={(event) => workspace.isOwner || event.createdBy === session.user.id} />
         )}
         {activeTab === 'briefing' && (
           <BriefingScreen copied={copied} onCopy={copyBriefing} onPrint={() => window.print()} profile={profile} events={events} hospitalRecords={allHospitalRecords} />
@@ -1045,6 +1073,8 @@ function DokeApp({ session }) {
         <ManualHospitalSheet initial={sheet.record} onClose={() => setSheet(null)} onSave={updateHospitalRecord} />
       ) : sheet?.type === 'timeline-edit' ? (
         <EditTimelineSheet event={sheet.event} onClose={() => setSheet(null)} onSave={updateEvent} />
+      ) : sheet?.type === 'meal-edit' ? (
+        <EditMealRecordSheet event={sheet.event} onClose={() => setSheet(null)} onSave={updateMealEvent} />
       ) : sheet?.type === 'meal-routine' ? (
         <MealRoutineSheet petName={profile.name} routines={mealRoutines} focusRoutineId={sheet.focusRoutineId} onClose={closeMealRoutine} onSave={saveMealRoutines} />
       ) : sheet?.type === 'health-notifications' ? (
@@ -1666,18 +1696,21 @@ function TimelineScreen({ events, petName, onChooseRecord, onDelete, onEdit, can
 function TimelineItem({ event, onDelete, onEdit }) {
   const type = recordTypes.find((item) => item.id === event.type) || customRecordType
   const Icon = type.icon
-  const routineMeal = event.source === 'meal_record' && Number.isFinite(event.routineTimeMinutes)
+  const mealRecord = event.source === 'meal_record'
+  const displayTime = mealRecord && Number.isFinite(event.routineTimeMinutes)
+    ? formatRoutineTime(event.routineTimeMinutes)
+    : event.time.replace(`${event.date} `, '')
   return (
     <article className="timeline-item">
       <div className={`timeline-icon ${type.color}`}><Icon size={19} /></div>
       <div className="timeline-copy">
-        <div className={`timeline-title ${routineMeal ? 'routine-meal' : ''}`}><strong>{event.title}</strong><time>{routineMeal ? formatRoutineTime(event.routineTimeMinutes) : event.time.replace(`${event.date} `, '')}</time></div>
+        <div className="timeline-title routine-meal"><strong>{event.title}</strong><time>{displayTime}</time></div>
         <p>{event.detail}</p>
-        {event.author && <small className="timeline-author">{honorificName(event.author)}이 기록{event.authorCreatedAtLabel ? ` · 작성 ${event.authorCreatedAtLabel}` : ''}</small>}
+        {event.author && <small className="timeline-author">{honorificName(event.author)}이 기록</small>}
         {event.note && <span>{event.note}</span>}
         {event.photo && <img className="timeline-photo" src={event.photo} alt={`${event.title} 첨부 사진`} />}
       </div>
-      {(onEdit || onDelete) && <div className="record-card-actions">{onEdit && <button className="edit-button" onClick={() => onEdit(event)} aria-label="기록 수정"><Pencil size={15} /></button>}{onDelete && <button className="delete-button" onClick={() => onDelete(event.id)} aria-label="기록 삭제"><Trash2 size={16} /></button>}</div>}
+      {(onEdit || onDelete) && <div className="record-card-actions timeline-record-actions">{onDelete && event.authorCreatedAt && <time className="timeline-saved-time">기록 시간 {formatSavedTime(event.authorCreatedAt)}</time>}{onEdit && <button className="edit-button" onClick={() => onEdit(event)} aria-label="기록 수정"><Pencil size={15} /></button>}{onDelete && <button className="delete-button" onClick={() => onDelete(event.id)} aria-label="기록 삭제"><Trash2 size={16} /></button>}</div>}
     </article>
   )
 }
@@ -2113,6 +2146,7 @@ function LogSheet({ type, onClose, onSave, mealRoutines = [], todayMealRecords =
     return {
       type,
       title: '',
+      date: getLocalDateKey(),
       ...currentTime,
       time: formatTimeParts(currentTime.period, currentTime.hour, currentTime.minute),
       timeMinutes: toTimeMinutes(currentTime.period, currentTime.hour, currentTime.minute),
@@ -2197,6 +2231,7 @@ function LogSheet({ type, onClose, onSave, mealRoutines = [], todayMealRecords =
           </section>
         )}
         {type === 'meal' && <div className="direct-meal-divider"><span>{initialMeal ? '내용을 수정해 실제 식사로 기록' : '루틴과 무관한 식사 직접 기록'}</span></div>}
+        <label className="record-date-input"><span>{type === 'weight' ? '측정 날짜' : '발생 날짜'}</span><input required type="date" value={form.date} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} /></label>
         <div className="time-input-field">
           <span className="time-input-label">{type === 'weight' ? '측정 시간' : '발생 시간'}</span>
           <div className="time-input-row">
@@ -2339,6 +2374,7 @@ function EditTimelineSheet({ event, onClose, onSave }) {
   const hour24 = occurred.getHours()
   const initialPeriod = hour24 >= 12 ? '오후' : '오전'
   const [form, setForm] = useState({
+    date: getLocalDateKey(occurred),
     period: initialPeriod,
     hour: String(hour24 % 12 || 12),
     minute: String(occurred.getMinutes()).padStart(2, '0'),
@@ -2369,10 +2405,71 @@ function EditTimelineSheet({ event, onClose, onSave }) {
       <form className="bottom-sheet" onSubmit={(submitEvent) => { submitEvent.preventDefault(); onSave(form) }}>
         <div className="sheet-handle" />
         <div className="sheet-header"><div className="sheet-title-icon green"><Pencil size={20} /></div><div><p>내가 작성한 기록</p><h2>{event.title} 수정</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={21} /></button></div>
+        <label className="record-date-input"><span>발생 날짜</span><input required type="date" value={form.date} onChange={(changeEvent) => setForm((current) => ({ ...current, date: changeEvent.target.value }))} /></label>
         <div className="time-input-field"><span className="time-input-label">발생 시간</span><div className="time-input-row"><div className="time-period-toggle">{['오전', '오후'].map((period) => <button type="button" key={period} className={form.period === period ? 'selected' : ''} onClick={() => updateTime('period', period)}>{period}</button>)}</div><div className="time-select-group"><select aria-label="시 선택" value={form.hour} onChange={(changeEvent) => updateTime('hour', changeEvent.target.value)}>{Array.from({ length: 12 }, (_, index) => index + 1).map((hour) => <option key={hour} value={hour}>{hour}</option>)}</select><span>시</span><select aria-label="분 선택" value={form.minute} onChange={(changeEvent) => updateTime('minute', changeEvent.target.value)}>{Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => <option key={minute} value={minute}>{minute}</option>)}</select><span>분</span></div></div></div>
         <label>관찰 내용<input required value={form.detail} onChange={(changeEvent) => setForm({ ...form, detail: changeEvent.target.value })} /></label>
         <label>메모<textarea value={form.note} onChange={(changeEvent) => setForm({ ...form, note: changeEvent.target.value })} /></label>
         <label className="photo-button"><input type="file" accept="image/*" onChange={(changeEvent) => attachPhoto(changeEvent.target.files?.[0])} />{photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진 첨부하기 (선택)'}</label>
+        <button className="primary-button full" type="submit">수정 내용 저장</button>
+      </form>
+    </div>
+  )
+}
+
+function EditMealRecordSheet({ event, onClose, onSave }) {
+  useEscapeClose(onClose)
+  const occurred = new Date(event.occurredAt)
+  const hour24 = occurred.getHours()
+  const initialPeriod = hour24 >= 12 ? '오후' : '오전'
+  const [form, setForm] = useState({
+    date: getLocalDateKey(occurred),
+    period: initialPeriod,
+    hour: String(hour24 % 12 || 12),
+    minute: String(occurred.getMinutes()).padStart(2, '0'),
+    timeMinutes: hour24 * 60 + occurred.getMinutes(),
+    foodName: event.foodName || '',
+    amountGrams: event.amountGrams == null ? '' : String(event.amountGrams),
+    status: event.mealStatus || 'confirmed',
+    note: event.note || '',
+    photo: event.photo || '',
+  })
+  const [photoName, setPhotoName] = useState(event.photo ? '기존 첨부 사진 유지' : '')
+  const [error, setError] = useState('')
+
+  const updateTime = (key, value) => setForm((current) => {
+    const next = { ...current, [key]: value }
+    return { ...next, timeMinutes: toTimeMinutes(next.period, next.hour, next.minute) }
+  })
+  const attachPhoto = async (file) => {
+    if (!file) return
+    setPhotoName(file.name)
+    try {
+      const photo = await resizeImage(file)
+      setForm((current) => ({ ...current, photo }))
+    } catch {
+      setPhotoName(event.photo ? '기존 첨부 사진 유지' : '')
+    }
+  }
+  const submit = (submitEvent) => {
+    submitEvent.preventDefault()
+    if (!form.foodName.trim()) return setError('음식 또는 사료 이름을 입력해 주세요.')
+    if (form.status === 'confirmed' && (!Number.isFinite(Number(form.amountGrams)) || Number(form.amountGrams) < 0)) return setError('섭취량을 0 이상으로 입력해 주세요.')
+    setError('')
+    onSave(form)
+  }
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(mouseEvent) => mouseEvent.target === mouseEvent.currentTarget && onClose()}>
+      <form className="bottom-sheet meal-edit-sheet" onSubmit={submit}>
+        <div className="sheet-handle" />
+        <div className="sheet-header"><div className="sheet-title-icon green"><Apple size={20} /></div><div><p>내가 작성한 식사 기록</p><h2>식사 기록 수정</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={21} /></button></div>
+        <label className="record-date-input"><span>식사 날짜</span><input required type="date" value={form.date} onChange={(changeEvent) => setForm((current) => ({ ...current, date: changeEvent.target.value }))} /></label>
+        <div className="time-input-field"><span className="time-input-label">실제 식사 시간</span><div className="time-input-row"><div className="time-period-toggle">{['오전', '오후'].map((period) => <button type="button" key={period} className={form.period === period ? 'selected' : ''} onClick={() => updateTime('period', period)}>{period}</button>)}</div><div className="time-select-group"><select aria-label="시 선택" value={form.hour} onChange={(changeEvent) => updateTime('hour', changeEvent.target.value)}>{Array.from({ length: 12 }, (_, index) => index + 1).map((hour) => <option key={hour} value={hour}>{hour}</option>)}</select><span>시</span><select aria-label="분 선택" value={form.minute} onChange={(changeEvent) => updateTime('minute', changeEvent.target.value)}>{Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => <option key={minute} value={minute}>{minute}</option>)}</select><span>분</span></div></div></div>
+        <div className="meal-status-choice"><span>식사 결과</span><div><button type="button" className={form.status === 'confirmed' ? 'selected' : ''} onClick={() => setForm((current) => ({ ...current, status: 'confirmed' }))}><Check size={15} /> 먹였어요</button><button type="button" className={form.status === 'skipped' ? 'selected' : ''} onClick={() => setForm((current) => ({ ...current, status: 'skipped' }))}>건너뜀</button></div></div>
+        <div className="form-columns"><label>음식·사료<input required value={form.foodName} onChange={(changeEvent) => setForm((current) => ({ ...current, foodName: changeEvent.target.value }))} placeholder="예: 건식 사료" /></label><label>섭취량<div className="unit-input"><input required={form.status === 'confirmed'} disabled={form.status === 'skipped'} type="number" min="0" max="999" step="0.1" inputMode="decimal" value={form.status === 'skipped' ? '' : form.amountGrams} onChange={(changeEvent) => setForm((current) => ({ ...current, amountGrams: changeEvent.target.value }))} placeholder={form.status === 'skipped' ? '섭취하지 않음' : '예: 24'} /><span>g</span></div></label></div>
+        <label>메모<textarea value={form.note} onChange={(changeEvent) => setForm((current) => ({ ...current, note: changeEvent.target.value }))} placeholder="보호자가 관찰한 상황이나 특이사항을 남겨주세요" /></label>
+        <label className="photo-button"><input type="file" accept="image/*" onChange={(changeEvent) => attachPhoto(changeEvent.target.files?.[0])} />{photoName ? <Check size={18} /> : <Camera size={18} />} {photoName || '사진 첨부하기 (선택)'}</label>
+        {error && <p className="form-message error" role="alert">{error}</p>}
         <button className="primary-button full" type="submit">수정 내용 저장</button>
       </form>
     </div>

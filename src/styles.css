@@ -219,6 +219,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .delete-button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: #b0aea7; cursor: pointer; }
 .delete-button:hover { background: var(--coral-soft); color: var(--coral); }
 .record-card-actions { display: flex; flex: 0 0 auto; flex-direction: column; gap: 2px; }
+.record-card-actions.timeline-record-actions { flex-direction: row; align-items: center; gap: 4px; }
+.timeline-saved-time { color: #77786f; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .edit-button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #9ba89d; cursor: pointer; }
 .edit-button:hover { background: var(--green-soft); color: var(--green-dark); }
 
@@ -408,6 +410,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .choice-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .choice-row button { height: 42px; border: 1px solid var(--line); border-radius: 12px; background: #faf9f6; color: var(--muted); font-size: 12px; cursor: pointer; }
 .choice-row button.selected { border-color: var(--green-dark); background: var(--green-soft); color: var(--green-dark); font-weight: 700; }
+.meal-status-choice { margin-bottom: 14px; }
+.meal-status-choice > span { display: block; margin-bottom: 7px; color: #5d5e57; font-size: 11px; font-weight: 700; }
+.meal-status-choice > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.meal-status-choice button { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line); border-radius: 12px; background: #faf9f6; color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; }
+.meal-status-choice button.selected { border-color: var(--green-dark); background: var(--green-soft); color: var(--green-dark); }
+.meal-edit-sheet input:disabled { background: #f1f0ec; color: var(--muted); cursor: not-allowed; }
 .unit-input { position: relative; }
 .unit-input input { padding-right: 36px; }
 .unit-input span { position: absolute; top: 50%; right: 12px; color: var(--muted); font-size: 11px; font-weight: 500; transform: translateY(-50%); }

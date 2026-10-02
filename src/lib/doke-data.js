@@ -464,6 +464,20 @@ export function useDokeData(session) {
       if (error) throw error
       await load()
     },
+    async updateMealRecord(record) {
+      const photoPath = record.photo?.startsWith('data:') ? await uploadDataUrl(householdId, user.id, record.photo, 'meal') : record.photoPath || null
+      const { error } = await supabase.from('meal_records').update({
+        occurred_at: record.occurredAt,
+        local_date: record.localDate,
+        food_name: record.foodName,
+        amount_grams: record.status === 'skipped' ? null : record.amountGrams,
+        status: record.status,
+        note: record.note || null,
+        photo_url: photoPath,
+      }).eq('id', record.id)
+      if (error) throw error
+      await load()
+    },
     async createTimeline(record) {
       const photoPath = await uploadDataUrl(householdId, user.id, record.photo, 'timeline')
       const { error } = await supabase.from('timeline_records').insert({ pet_id: record.petId, created_by: user.id, record_type: record.type, occurred_at: record.occurredAt, details: record.details, photo_url: photoPath })

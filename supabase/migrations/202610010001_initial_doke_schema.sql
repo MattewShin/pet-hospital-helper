@@ -494,6 +494,9 @@ create policy "meal_records_insert_member" on public.meal_records for insert to 
   with check (created_by = auth.uid() and public.is_active_household_member(public.pet_household(pet_id)));
 create policy "meal_records_delete_author_or_owner" on public.meal_records for delete to authenticated
   using (public.is_active_household_member(public.pet_household(pet_id)) and (created_by = auth.uid() or public.is_household_owner(public.pet_household(pet_id))));
+create policy "meal_records_update_author_or_owner" on public.meal_records for update to authenticated
+  using (public.is_active_household_member(public.pet_household(pet_id)) and (created_by = auth.uid() or public.is_household_owner(public.pet_household(pet_id))))
+  with check (public.is_active_household_member(public.pet_household(pet_id)) and (created_by = auth.uid() or public.is_household_owner(public.pet_household(pet_id))));
 
 create policy "health_routines_select_member" on public.health_routines for select to authenticated
   using (public.is_active_household_member(public.pet_household(pet_id)));

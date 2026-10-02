@@ -19,7 +19,7 @@
 ## 1. Supabase 설정
 
 1. Supabase 프로젝트를 생성합니다.
-2. 새 Supabase 프로젝트라면 최신 내용이 합쳐진 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)만 실행합니다. 이미 `001`을 실행한 기존 프로젝트는 `001`을 다시 실행하지 말고, 아직 적용하지 않은 증분 마이그레이션을 `002 → 003 → 004 → 005 → 006 → 007 → 008` 순서로 실행합니다.
+2. 새 Supabase 프로젝트라면 최신 내용이 합쳐진 [`supabase/migrations/202610010001_initial_doke_schema.sql`](supabase/migrations/202610010001_initial_doke_schema.sql)만 실행합니다. 이미 `001`을 실행한 기존 프로젝트는 `001`을 다시 실행하지 말고, 아직 적용하지 않은 증분 마이그레이션을 `002 → 003 → 004 → 005 → 006 → 007 → 008 → 009` 순서로 실행합니다.
 3. Authentication → Providers에서 Email 로그인을 켭니다.
 4. Authentication → URL Configuration에서 다음을 설정합니다.
    - Site URL: 실제 Vercel 주소(예: `https://doke.example.com`)
